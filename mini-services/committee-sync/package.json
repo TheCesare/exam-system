@@ -7,8 +7,5 @@
   },
   "dependencies": {
     "socket.io": "^4.8.1"
-  },
-  "devDependencies": {
-    "@types/bun": "^1.2.14"
   }
 }

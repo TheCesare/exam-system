@@ -7,14 +7,30 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-model Committee {
-  id          String   @id @default(cuid())
-  title       String
-  description String?
-  memberName  String
-  memberPhone String?
-  status      String   @default("pending") // pending, in_progress, completed, rejected
-  notes       String?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+model Teacher {
+  id        String   @id @default(cuid())
+  name      String
+  subject   String
+  notes     String   @default("")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model ScheduleCell {
+  id        String @id @default(cuid())
+  grade     String
+  day       String
+  committees Int    @default(0)
+  subject   String @default("")
+  time      String @default("")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([grade, day])
+}
+
+model DistributionResult {
+  id        String   @id @default(cuid())
+  data      String   // JSON blob of assignments + tracking
+  createdAt DateTime @default(now())
 }
