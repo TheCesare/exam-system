@@ -1,1 +1,58 @@
-@import "tailwindcss";
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@300;400;500;600;700&display=swap');
+
+:root {
+  --bg: #0a0e1a;
+  --surface: #111827;
+  --surface2: #1a2235;
+  --border: #1e3a5f;
+  --accent: #00d4ff;
+  --accent2: #ff6b35;
+  --accent3: #00ff9d;
+  --text: #e2e8f0;
+  --text2: #94a3b8;
+  --danger: #ff4444;
+  --warning: #ffaa00;
+  --success: #00cc6a;
+  --mono: 'IBM Plex Mono', monospace;
+  --sans: 'IBM Plex Sans', sans-serif;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  font-family: var(--sans);
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+  direction: ltr;
+}
+
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(0,212,255,0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0,212,255,0.03) 1px, transparent 1px);
+  background-size: 40px 40px;
+  pointer-events: none;
+  z-index: 0;
+}
+
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: var(--bg); }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+input, select, button, textarea {
+  font-family: var(--sans);
+}
+
+input::placeholder, select::placeholder {
+  color: var(--text2);
+  opacity: 0.6;
+}
+
+select option {
+  background: var(--surface2);
+  color: var(--text);
+}

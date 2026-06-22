@@ -900,8 +900,6 @@ export default function ExamSystem() {
       <div id="app-toast" className="toast" />
 
       <style jsx>{`
-        @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@300;400;500;600;700&display=swap');
-
         @keyframes pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.4;transform:scale(1.4)} }
         @keyframes spin { to { transform: rotate(360deg); } }
 
