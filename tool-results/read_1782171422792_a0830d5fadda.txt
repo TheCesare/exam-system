@@ -1,0 +1,1208 @@
+     1→<!DOCTYPE html>
+     2→<html lang="en" dir="ltr">
+     3→<head>
+     4→<meta charset="UTF-8">
+     5→<meta name="viewport" content="width=device-width, initial-scale=1.0">
+     6→<title>Exam Supervisor System - Time Lock Grid v9</title>
+     7→<style>
+     8→  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@300;400;500;600;700&display=swap');
+     9→
+    10→  :root {
+    11→    --bg: #0a0e1a;
+    12→    --surface: #111827;
+    13→    --surface2: #1a2235;
+    14→    --border: #1e3a5f;
+    15→    --accent: #00d4ff;
+    16→    --accent2: #ff6b35;
+    17→    --accent3: #00ff9d;
+    18→    --text: #e2e8f0;
+    19→    --text2: #94a3b8;
+    20→    --danger: #ff4444;
+    21→    --warning: #ffaa00;
+    22→    --success: #00cc6a;
+    23→    --mono: 'IBM Plex Mono', monospace;
+    24→    --sans: 'IBM Plex Sans', sans-serif;
+    25→  }
+    26→
+    27→  * { margin:0; padding:0; box-sizing:border-box; }
+    28→
+    29→  body {
+    30→    font-family: var(--sans);
+    31→    background: var(--bg);
+    32→    color: var(--text);
+    33→    min-height: 100vh;
+    34→    direction: ltr;
+    35→  }
+    36→
+    37→  body::before {
+    38→    content:'';
+    39→    position:fixed;
+    40→    inset:0;
+    41→    background-image:
+    42→      linear-gradient(rgba(0,212,255,0.03) 1px, transparent 1px),
+    43→      linear-gradient(90deg, rgba(0,212,255,0.03) 1px, transparent 1px);
+    44→    background-size: 40px 40px;
+    45→    pointer-events:none;
+    46→    z-index:0;
+    47→  }
+    48→
+    49→  .app { position:relative; z-index:1; }
+    50→
+    51→  header {
+    52→    background: linear-gradient(135deg, #0d1b2e 0%, #0a1628 100%);
+    53→    border-bottom: 1px solid var(--border);
+    54→    padding: 0 32px;
+    55→    display: flex;
+    56→    align-items: center;
+    57→    justify-content: space-between;
+    58→    height: 64px;
+    59→    position: sticky;
+    60→    top: 0;
+    61→    z-index: 100;
+    62→    backdrop-filter: blur(20px);
+    63→  }
+    64→
+    65→  .logo {
+    66→    display: flex;
+    67→    align-items: center;
+    68→    gap: 12px;
+    69→    font-family: var(--mono);
+    70→    font-size: 14px;
+    71→    color: var(--accent);
+    72→    letter-spacing: 2px;
+    73→    text-transform: uppercase;
+    74→  }
+    75→
+    76→  .logo-dot {
+    77→    width: 8px; height: 8px;
+    78→    background: var(--accent);
+    79→    border-radius: 50%;
+    80→    animation: pulse 2s infinite;
+    81→  }
+    82→
+    83→  @keyframes pulse {
+    84→    0%,100%{opacity:1;transform:scale(1)}
+    85→    50%{opacity:0.4;transform:scale(1.4)}
+    86→  }
+    87→
+    88→  .header-actions { display:flex; gap:12px; }
+    89→
+    90→  .nav-tabs {
+    91→    display: flex;
+    92→    gap: 0;
+    93→    background: var(--surface);
+    94→    border-bottom: 1px solid var(--border);
+    95→    padding: 0 32px;
+    96→    overflow-x: auto;
+    97→  }
+    98→
+    99→  .nav-tab {
+   100→    padding: 14px 24px;
+   101→    font-size: 13px;
+   102→    font-weight: 500;
+   103→    color: var(--text2);
+   104→    cursor: pointer;
+   105→    border-bottom: 2px solid transparent;
+   106→    transition: all 0.2s;
+   107→    white-space: nowrap;
+   108→    user-select: none;
+   109→  }
+   110→
+   111→  .nav-tab:hover { color: var(--text); }
+   112→  .nav-tab.active {
+   113→    color: var(--accent);
+   114→    border-bottom-color: var(--accent);
+   115→  }
+   116→
+   117→  .main { padding: 28px 32px; max-width: 1400px; margin: 0 auto; }
+   118→
+   119→  .page { display: none; }
+   120→  .page.active { display: block; }
+   121→
+   122→  .card {
+   123→    background: var(--surface);
+   124→    border: 1px solid var(--border);
+   125→    border-radius: 12px;
+   126→    padding: 24px;
+   127→    margin-bottom: 20px;
+   128→  }
+   129→
+   130→  .card-header {
+   131→    display: flex;
+   132→    align-items: center;
+   133→    justify-content: space-between;
+   134→    margin-bottom: 20px;
+   135→  }
+   136→
+   137→  .card-title {
+   138→    font-size: 15px;
+   139→    font-weight: 600;
+   140→    color: var(--text);
+   141→    display: flex;
+   142→    align-items: center;
+   143→    gap: 10px;
+   144→  }
+   145→
+   146→  .card-title::before {
+   147→    content:'';
+   148→    width: 3px; height: 18px;
+   149→    background: var(--accent);
+   150→    border-radius: 2px;
+   151→  }
+   152→
+   153→  .btn {
+   154→    display: inline-flex;
+   155→    align-items: center;
+   156→    gap: 8px;
+   157→    padding: 9px 18px;
+   158→    border-radius: 8px;
+   159→    font-size: 13px;
+   160→    font-weight: 500;
+   161→    cursor: pointer;
+   162→    border: none;
+   163→    transition: all 0.2s;
+   164→    font-family: var(--sans);
+   165→  }
+   166→
+   167→  .btn-primary { background: var(--accent); color: #000; }
+   168→  .btn-primary:hover { background: #00b8d9; transform:translateY(-1px); }
+   169→
+   170→  .btn-demo { background: #8a2be2; color: #fff; border: 1px solid rgba(255,255,255,0.1); }
+   171→  .btn-demo:hover { background: #9932cc; transform:translateY(-1px); }
+   172→
+   173→  .btn-ghost {
+   174→    background: transparent;
+   175→    color: var(--text2);
+   176→    border: 1px solid var(--border);
+   177→  }
+   178→  .btn-ghost:hover { color:var(--text); border-color: var(--accent); }
+   179→
+   180→  .btn-orange {
+   181→    background: var(--accent2);
+   182→    color: #fff;
+   183→    padding: 12px 32px;
+   184→    font-size: 15px;
+   185→    font-weight: 600;
+   186→  }
+   187→  .btn-orange:hover { background: #e55a2b; transform:translateY(-2px); box-shadow: 0 8px 24px rgba(255,107,53,0.3); }
+   188→
+   189→  .table-wrap { overflow-x: auto; }
+   190→
+   191→  table {
+   192→    width: 100%;
+   193→    border-collapse: collapse;
+   194→    font-size: 13px;
+   195→  }
+   196→
+   197→  thead th {
+   198→    background: var(--surface2);
+   199→    padding: 10px 14px;
+   200→    text-align: left;
+   201→    font-weight: 600;
+   202→    color: var(--text2);
+   203→    font-size: 12px;
+   204→    border-bottom: 1px solid var(--border);
+   205→    white-space: nowrap;
+   206→  }
+   207→
+   208→  tbody tr {
+   209→    border-bottom: 1px solid rgba(30,58,95,0.5);
+   210→    transition: background 0.15s;
+   211→  }
+   212→  tbody tr:hover { background: rgba(0,212,255,0.03); }
+   213→
+   214→  tbody td {
+   215→    padding: 10px 14px;
+   216→    color: var(--text);
+   217→    vertical-align: middle;
+   218→  }
+   219→
+   220→  .form-group { margin-bottom: 16px; }
+   221→  .form-label {
+   222→    display: block;
+   223→    font-size: 12px;
+   224→    font-weight: 500;
+   225→    color: var(--text2);
+   226→    margin-bottom: 6px;
+   227→  }
+   228→
+   229→  .form-input, .form-select {
+   230→    width: 100%;
+   231→    padding: 9px 13px;
+   232→    background: var(--surface2);
+   233→    border: 1px solid var(--border);
+   234→    border-radius: 8px;
+   235→    color: var(--text);
+   236→    font-size: 13px;
+   237→    font-family: var(--sans);
+   238→  }
+   239→
+   240→  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+   241→  .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; }
+   242→  .grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+   243→
+   244→  .stat-card {
+   245→    background: var(--surface2);
+   246→    border: 1px solid var(--border);
+   247→    border-radius: 10px;
+   248→    padding: 20px;
+   249→    text-align: center;
+   250→  }
+   251→
+   252→  .stat-number {
+   253→    font-family: var(--mono);
+   254→    font-size: 28px;
+   255→    font-weight: 600;
+   256→    color: var(--accent);
+   257→    display: block;
+   258→  }
+   259→
+   260→  .stat-label {
+   261→    font-size: 12px;
+   262→    color: var(--text2);
+   263→    margin-top: 4px;
+   264→  }
+   265→
+   266→  .badge {
+   267→    display: inline-block;
+   268→    padding: 3px 10px;
+   269→    border-radius: 20px;
+   270→    font-size: 11px;
+   271→    font-weight: 600;
+   272→  }
+   273→  .badge-blue { background:rgba(0,212,255,0.15); color:var(--accent); }
+   274→  .badge-orange { background:rgba(255,107,53,0.15); color:var(--accent2); }
+   275→  .badge-green { background:rgba(0,255,157,0.15); color:var(--accent3); }
+   276→  .badge-red { background:rgba(255,68,68,0.15); color:var(--danger); }
+   277→
+   278→  #toast {
+   279→    position: fixed;
+   280→    bottom: 28px;
+   281→    left: 50%;
+   282→    transform: translateX(-50%) translateY(100px);
+   283→    background: var(--surface);
+   284→    border: 1px solid var(--border);
+   285→    border-radius: 10px;
+   286→    padding: 14px 24px;
+   287→    font-size: 14px;
+   288→    z-index: 999;
+   289→    transition: transform 0.3s ease;
+   290→    min-width: 300px;
+   291→    text-align: center;
+   292→  }
+   293→  #toast.show { transform: translateX(-50%) translateY(0); }
+   294→  #toast.success { border-color: var(--success); color: var(--success); }
+   295→
+   296→  .action-btn { background: none; border: none; cursor: pointer; font-size: 14px; padding: 4px 8px; border-radius: 4px; }
+   297→  .del-btn { color: var(--danger); }
+   298→  .edit-btn { color: var(--accent); margin-right: 6px; }
+   299→
+   300→  .schedule-grid {
+   301→    display: grid;
+   302→    grid-template-columns: 160px repeat(6, 1fr);
+   303→    gap: 4px;
+   304→    font-size: 12px;
+   305→  }
+   306→
+   307→  .sg-header {
+   308→    background: var(--surface2);
+   309→    padding: 10px 8px;
+   310→    text-align: center;
+   311→    font-weight: 600;
+   312→    color: var(--accent);
+   313→    border-radius: 6px;
+   314→  }
+   315→
+   316→  .sg-grade {
+   317→    background: var(--surface2);
+   318→    padding: 10px 12px;
+   319→    font-weight: 500;
+   320→    border-radius: 6px;
+   321→    display: flex;
+   322→    align-items: center;
+   323→  }
+   324→
+   325→  .sg-cell {
+   326→    background: var(--surface2);
+   327→    border-radius: 6px;
+   328→    padding: 6px;
+   329→    display: flex;
+   330→    flex-direction: column;
+   331→    gap: 4px;
+   332→  }
+   333→
+   334→  .sg-cell input[type="number"] {
+   335→    width: 100%;
+   336→    background: var(--bg);
+   337→    border: 1px solid var(--border);
+   338→    border-radius: 4px;
+   339→    color: var(--text);
+   340→    font-size: 12px;
+   341→    padding: 4px 6px;
+   342→    text-align: center;
+   343→  }
+   344→
+   345→  .sg-cell select, .sg-cell input[type="text"] {
+   346→    width: 100%;
+   347→    background: var(--bg);
+   348→    border: 1px solid var(--border);
+   349→    border-radius: 4px;
+   350→    color: var(--text);
+   351→    font-size: 11px;
+   352→    padding: 4px 6px;
+   353→  }
+   354→
+   355→  .result-day {
+   356→    background: var(--surface);
+   357→    border: 1px solid var(--border);
+   358→    border-radius: 12px;
+   359→    margin-bottom: 16px;
+   360→    overflow: hidden;
+   361→  }
+   362→
+   363→  .result-day-header {
+   364→    background: var(--surface2);
+   365→    padding: 14px 20px;
+   366→    display: flex;
+   367→    align-items: center;
+   368→    justify-content: space-between;
+   369→    cursor: pointer;
+   370→  }
+   371→
+   372→  .result-day-title {
+   373→    font-weight: 600;
+   374→    font-size: 14px;
+   375→    color: var(--accent);
+   376→    display: flex;
+   377→    align-items: center;
+   378→    gap: 10px;
+   379→  }
+   380→
+   381→  .result-day-body { padding: 16px 20px; }
+   382→
+   383→  .result-session {
+   384→    margin-bottom: 16px;
+   385→    border: 1px solid var(--border);
+   386→    border-radius: 8px;
+   387→    overflow: hidden;
+   388→  }
+   389→
+   390→  .result-session-header {
+   391→    background: rgba(0,212,255,0.05);
+   392→    padding: 10px 16px;
+   393→    display: flex;
+   394→    gap: 20px;
+   395→    align-items: center;
+   396→    font-size: 12px;
+   397→  }
+   398→
+   399→  .rs-grade { font-weight: 600; color: var(--text); }
+   400→  .rs-time { color: var(--accent); font-family: var(--mono); }
+   401→  .rs-subject { color: var(--accent2); }
+   402→
+   403→  .result-com {
+   404→    display: grid;
+   405→    grid-template-columns: 60px 1fr 1fr 100px;
+   406→    gap: 0;
+   407→    font-size: 12px;
+   408→  }
+   409→
+   410→  .rc-cell {
+   411→    padding: 8px 12px;
+   412→    border-bottom: 1px solid rgba(30,58,95,0.4);
+   413→    display: flex;
+   414→    align-items: center;
+   415→  }
+   416→
+   417→  .rc-num { color: var(--text2); font-family: var(--mono); justify-content: center; }
+   418→  .rc-double { background: rgba(255,107,53,0.1); color: var(--accent2); font-weight: 600; }
+   419→
+   420→  ::-webkit-scrollbar { width: 6px; height: 6px; }
+   421→  ::-webkit-scrollbar-track { background: var(--bg); }
+   422→  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+   423→
+   424→  .distribute-btn-wrap { text-align: center; padding: 32px; }
+   425→  .empty-state { text-align: center; padding: 48px; color: var(--text2); }
+   426→</style>
+   427→</head>
+   428→<body>
+   429→<div class="app">
+   430→
+   431→<header>
+   432→  <div class="logo">
+   433→    <div class="logo-dot"></div>
+   434→    EXAM · SUPERVISOR · TIME-LOCK · EQUALIZER · v9
+   435→  </div>
+   436→  <div class="header-actions">
+   437→    <button class="btn btn-ghost" onclick="exportResults()">📥 Export CSV</button>
+   438→    <button class="btn btn-ghost" onclick="clearAll()">🗑 Reset All</button>
+   439→  </div>
+   440→</header>
+   441→
+   442→<div class="nav-tabs">
+   443→  <div class="nav-tab active" onclick="showPage('teachers',this)">👨‍🏫 Teachers</div>
+   444→  <div class="nav-tab" onclick="showPage('schedule',this)">📅 Schedule</div>
+   445→  <div class="nav-tab" onclick="showPage('distribute',this)">⚡ Distribute</div>
+   446→  <div class="nav-tab" onclick="showPage('results',this)">📋 Results</div>
+   447→  <div class="nav-tab" onclick="showPage('stats',this)">📊 Statistics Load Ledger</div>
+   448→</div>
+   449→
+   450→<div class="main">
+   451→
+   452→<div id="page-teachers" class="page active">
+   453→  <div class="card">
+   454→    <div class="card-header">
+   455→      <div class="card-title">Teacher Registry</div>
+   456→      <div style="display:flex;gap:10px;flex-wrap:wrap;">
+   457→        <button class="btn btn-demo" onclick="generateDemoTeachers()">🧪 Generate 200 Mock Teachers</button>
+   458→        <button class="btn btn-ghost" onclick="importTeachers()">📂 Import CSV</button>
+   459→        <button class="btn btn-primary" onclick="showAddTeacher()">+ Add New Teacher</button>
+   460→      </div>
+   461→    </div>
+   462→
+   463→    <div id="add-teacher-form" style="display:none; background:var(--surface2); border-radius:10px; padding:20px; margin-bottom:20px;">
+   464→      <input type="hidden" id="edit-t-id" value="">
+   465→      <div class="grid-3">
+   466→        <div class="form-group">
+   467→          <label class="form-label">Full Name</label>
+   468→          <input class="form-input" id="t-name" placeholder="e.g. John Doe" />
+   469→        </div>
+   470→        <div class="form-group">
+   471→          <label class="form-label">Specialist Subject</label>
+   472→          <select class="form-select" id="t-subject">
+   473→            <option value="">-- Choose Subject --</option>
+   474→            <option>Math</option><option>Science</option><option>Arabic</option>
+   475→            <option>English</option><option>French</option><option>Social Studies</option>
+   476→            <option>Arts</option><option>Computer</option><option>Library</option>
+   477→            <option>Religion</option><option>Psychology</option><option>Admin</option><option>Other</option>
+   478→          </select>
+   479→        </div>
+   480→        <div class="form-group">
+   481→          <label class="form-label">Stage Assignment Notes</label>
+   482→          <input class="form-input" id="t-notes" placeholder="e.g. prep, sec, primary" />
+   483→        </div>
+   484→      </div>
+   485→      <div style="display:flex;gap:10px">
+   486→        <button class="btn btn-primary" id="btn-save-teacher" onclick="saveTeacherClick()">✓ Save Teacher</button>
+   487→        <button class="btn btn-ghost" onclick="cancelTeacherEdit()">Cancel</button>
+   488→      </div>
+   489→    </div>
+   490→
+   491→    <div id="teachers-stats" style="display:flex;gap:12px;margin-bottom:16px;flex-wrap:wrap"></div>
+   492→
+   493→    <div class="table-wrap">
+   494→      <table id="teachers-table">
+   495→        <thead>
+   496→          <tr>
+   497→            <th>Index</th>
+   498→            <th>Teacher Name</th>
+   499→            <th>Subject Badge</th>
+   500→            <th>Stage Rules</th>
+   501→            <th>Actions</th>
+   502→          </tr>
+   503→        </thead>
+   504→        <tbody id="teachers-body"></tbody>
+   505→      </table>
+   506→    </div>
+   507→  </div>
+   508→</div>
+   509→
+   510→<div id="page-schedule" class="page">
+   511→  <div class="card">
+   512→    <div class="card-header">
+   513→      <div class="card-title">Exam Structure Blueprint</div>
+   514→      <button class="btn btn-ghost" onclick="resetSchedule()">↺ Reset Matrix</button>
+   515→    </div>
+   516→    <div class="table-wrap">
+   517→      <div class="schedule-grid" id="schedule-grid"></div>
+   518→    </div>
+   519→  </div>
+   520→</div>
+   521→
+   522→<div id="page-distribute" class="page">
+   523→  <div class="grid-4" id="distribute-stats" style="margin-bottom:24px"></div>
+   524→
+   525→  <div class="card">
+   526→    <div class="card-title" style="margin-bottom:16px">Mathematical Distribution Engine Constraints</div>
+   527→    <div class="grid-2">
+   528→      <div style="display:flex;flex-direction:column;gap:10px">
+   529→        <label style="display:flex;align-items:center;gap:10px;font-size:13px;cursor:pointer">
+   530→          <input type="checkbox" id="rule-subject" checked style="width:16px;height:16px;accent-color:var(--accent)">
+   531→          Block Specialty Subjects (Never supervise own exam)
+   532→        </label>
+   533→        <label style="display:flex;align-items:center;gap:10px;font-size:13px;cursor:pointer">
+   534→          <input type="checkbox" id="rule-daylimit" checked style="width:16px;height:16px;accent-color:var(--accent)">
+   535→          Enforce Hard Cap: **Strictly Max 1 Committee Per Day**
+   536→        </label>
+   537→      </div>
+   538→      <div style="display:flex;flex-direction:column;gap:10px">
+   539→        <label style="display:flex;align-items:center;gap:10px;font-size:13px;cursor:pointer">
+   540→          <input type="checkbox" id="rule-notes" checked style="width:16px;height:16px;accent-color:var(--accent)">
+   541→          Match Stage Preferences Safely with Fallback (Eliminate Standby)
+   542→        </label>
+   543→      </div>
+   544→    </div>
+   545→  </div>
+   546→
+   547→  <div class="distribute-btn-wrap">
+   548→    <button class="btn btn-orange" onclick="runDistribution()">
+   549→      ⚡ RUN ULTRA ANTI-OVERLAP BALANCER
+   550→    </button>
+   551→  </div>
+   552→</div>
+   553→
+   554→<div id="page-results" class="page">
+   555→  <div id="results-container"></div>
+   556→</div>
+   557→
+   558→<div id="page-stats" class="page">
+   559→  <div id="stats-container"></div>
+   560→</div>
+   561→
+   562→</div>
+   563→</div>
+   564→
+   565→<div id="toast"></div>
+   566→
+   567→<script>
+   568→let state = {
+   569→  teachers: [],
+   570→  schedule: {},
+   571→  results: {},
+   572→  nextTeacherId: 1
+   573→};
+   574→
+   575→const DAYS = ['Saturday','Sunday','Monday','Tuesday','Wednesday','Thursday'];
+   576→const GRADES = [
+   577→  'Grade 3 Primary','Grade 4 Primary','Grade 5 Primary','Grade 6 Primary',
+   578→  'Grade 1 Prep','Grade 2 Prep','Grade 1 Secondary','Grade 2 Secondary'
+   579→];
+   580→const SUBJECTS = ['Math','Science','Arabic','English','French','Social Studies',
+   581→                  'Arts','Computer','Library','Religion','Psychology','Admin','Other'];
+   582→const DEFAULT_TIMES = {
+   583→  'Grade 3 Primary':'9:00-10:30','Grade 4 Primary':'9:00-10:30',
+   584→  'Grade 5 Primary':'9:00-10:30','Grade 6 Primary':'9:00-10:30',
+   585→  'Grade 1 Prep':'9:00-11:00','Grade 2 Prep':'9:00-11:00',
+   586→  'Grade 1 Secondary':'12:00-14:00','Grade 2 Secondary':'8:30-10:30'
+   587→};
+   588→
+   589→function loadState() {
+   590→  try {
+   591→    const saved = localStorage.getItem('examSupervisorState');
+   592→    if (saved) {
+   593→      state = JSON.parse(saved);
+   594→      if(!state.teachers) state.teachers = [];
+   595→      if(!state.schedule) state.schedule = {};
+   596→      if(!state.results) state.results = {};
+   597→      if(!state.nextTeacherId) {
+   598→        state.nextTeacherId = state.teachers.reduce((max, t) => Math.max(max, t.id), 0) + 1;
+   599→      }
+   600→    }
+   601→  } catch(e) {}
+   602→}
+   603→
+   604→function saveState() {
+   605→  try { localStorage.setItem('examSupervisorState', JSON.stringify(state)); } catch(e) {}
+   606→}
+   607→
+   608→function showPage(name, el) {
+   609→  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+   610→  document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
+   611→  document.getElementById('page-' + name).classList.add('active');
+   612→  if (el) el.classList.add('active');
+   613→  if (name === 'teachers') renderTeachers();
+   614→  if (name === 'schedule') renderSchedule();
+   615→  if (name === 'distribute') renderDistributeStats();
+   616→  if (name === 'results') renderResults();
+   617→  if (name === 'stats') renderStats();
+   618→}
+   619→
+   620→function toast(msg, type='info') {
+   621→  const t = document.getElementById('toast');
+   622→  t.textContent = msg;
+   623→  t.className = 'show ' + type;
+   624→  setTimeout(() => t.className = '', 3000);
+   625→}
+   626→
+   627→function showAddTeacher() {
+   628→  cancelTeacherEdit();
+   629→  const f = document.getElementById('add-teacher-form');
+   630→  f.style.display = f.style.display === 'none' ? 'block' : 'none';
+   631→}
+   632→
+   633→function saveTeacherClick() {
+   634→  const name = document.getElementById('t-name').value.trim();
+   635→  const subject = document.getElementById('t-subject').value;
+   636→  const notes = document.getElementById('t-notes').value.trim();
+   637→  const editId = document.getElementById('edit-t-id').value;
+   638→
+   639→  if (!name || !subject) { toast('Please complete all fields', 'error'); return; }
+   640→
+   641→  if (editId) {
+   642→    const idx = state.teachers.findIndex(t => t.id == editId);
+   643→    if (idx !== -1) {
+   644→      state.teachers[idx].name = name;
+   645→      state.teachers[idx].subject = subject;
+   646→      state.teachers[idx].notes = notes;
+   647→    }
+   648→  } else {
+   649→    state.teachers.push({ id: state.nextTeacherId++, name, subject, notes });
+   650→  }
+   651→
+   652→  saveState();
+   653→  cancelTeacherEdit();
+   654→  renderTeachers();
+   655→}
+   656→
+   657→function startEditTeacher(id) {
+   658→  const t = state.teachers.find(teacher => teacher.id === id);
+   659→  if (!t) return;
+   660→  document.getElementById('add-teacher-form').style.display = 'block';
+   661→  document.getElementById('edit-t-id').value = t.id;
+   662→  document.getElementById('t-name').value = t.name;
+   663→  document.getElementById('t-subject').value = t.subject;
+   664→  document.getElementById('t-notes').value = t.notes || '';
+   665→}
+   666→
+   667→function cancelTeacherEdit() {
+   668→  document.getElementById('edit-t-id').value = '';
+   669→  document.getElementById('t-name').value = '';
+   670→  document.getElementById('t-subject').value = '';
+   671→  document.getElementById('t-notes').value = '';
+   672→  document.getElementById('add-teacher-form').style.display = 'none';
+   673→}
+   674→
+   675→function deleteTeacher(id) {
+   676→  state.teachers = state.teachers.filter(t => t.id !== id);
+   677→  saveState();
+   678→  renderTeachers();
+   679→}
+   680→
+   681→function renderTeachers() {
+   682→  const tbody = document.getElementById('teachers-body');
+   683→  if (state.teachers.length === 0) {
+   684→    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;padding:32px;">No teachers loaded in registry.</td></tr>';
+   685→    return;
+   686→  }
+   687→  tbody.innerHTML = state.teachers.map((t, i) => `
+   688→    <tr>
+   689→      <td>${i+1}</td>
+   690→      <td style="font-weight:600; color:var(--text);">${t.name}</td>
+   691→      <td><span class="badge badge-blue">${t.subject}</span></td>
+   692→      <td style="color:var(--accent3)">${t.notes || 'Any Stage'}</td>
+   693→      <td>
+   694→        <button class="action-btn edit-btn" onclick="startEditTeacher(${t.id})">✏️ Edit</button>
+   695→        <button class="action-btn del-btn" onclick="deleteTeacher(${t.id})">✕ Remove</button>
+   696→      </td>
+   697→    </tr>
+   698→  `).join('');
+   699→
+   700→  const counts = {};
+   701→  state.teachers.forEach(t => counts[t.subject] = (counts[t.subject]||0)+1);
+   702→  document.getElementById('teachers-stats').innerHTML =
+   703→    `<span class="badge badge-green">Total Registered: ${state.teachers.length}</span>` +
+   704→    Object.entries(counts).map(([s,c]) => `<span class="badge badge-blue">${s}: ${c}</span>`).join('');
+   705→}
+   706→
+   707→function generateDemoTeachers() {
+   708→  state.teachers = [];
+   709→  state.nextTeacherId = 1;
+   710→  let count = 1;
+   711→
+   712→  for (let i = 1; i <= 15; i++) {
+   713→    let notes = (i <= 9) ? "prep, sec" : "";
+   714→    state.teachers.push({ id: state.nextTeacherId++, name: `Math Specialist Expert T${count++}`, subject: 'Math', notes: notes });
+   715→  }
+   716→  for (let i = 1; i <= 45; i++) {
+   717→    state.teachers.push({ id: state.nextTeacherId++, name: `English Senior Faculty T${count++}`, subject: 'English', notes: "" });
+   718→  }
+   719→  for (let i = 1; i <= 40; i++) {
+   720→    let notes = (i <= 16) ? "prep, sec" : "";
+   721→    state.teachers.push({ id: state.nextTeacherId++, name: `Arabic Lang Professor T${count++}`, subject: 'Arabic', notes: notes });
+   722→  }
+   723→  for (let i = 1; i <= 9; i++) {
+   724→    state.teachers.push({ id: state.nextTeacherId++, name: `French Educator Staff T${count++}`, subject: 'French', notes: "" });
+   725→  }
+   726→  for (let i = 1; i <= 8; i++) {
+   727→    let notes = (i === 1) ? "prep, sec" : "";
+   728→    state.teachers.push({ id: state.nextTeacherId++, name: `Social Studies Instructor T${count++}`, subject: 'Social Studies', notes: notes });
+   729→  }
+   730→  for (let i = 1; i <= 9; i++) {
+   731→    state.teachers.push({ id: state.nextTeacherId++, name: `Pure Science Research T${count++}`, subject: 'Science', notes: "" });
+   732→  }
+   733→  const otherSubjects = ['Arts', 'Computer', 'Library', 'Religion', 'Psychology', 'Admin', 'Other'];
+   734→  for (let i = 1; i <= 74; i++) {
+   735→    let sub = otherSubjects[i % otherSubjects.length];
+   736→    state.teachers.push({ id: state.nextTeacherId++, name: `${sub} Resource Officer T${count++}`, subject: sub, notes: "" });
+   737→  }
+   738→
+   739→  saveState();
+   740→  renderTeachers();
+   741→  toast('Injected 200 Mock Teachers Successfully!', 'success');
+   742→}
+   743→
+   744→function importTeachers() {
+   745→  const input = document.createElement('input');
+   746→  input.type = 'file'; input.accept = '.csv';
+   747→  input.onchange = e => {
+   748→    const file = e.target.files[0];
+   749→    const reader = new FileReader();
+   750→    reader.onload = ev => {
+   751→      const lines = ev.target.result.split('\n');
+   752→      lines.forEach(line => {
+   753→        const parts = line.split(',').map(p => p.trim());
+   754→        if (parts.length >= 2 && parts[0]) {
+   755→          state.teachers.push({ id: state.nextTeacherId++, name: parts[0], subject: parts[1], notes: parts[2]||'' });
+   756→        }
+   757→      });
+   758→      saveState(); renderTeachers();
+   759→    };
+   760→    reader.readAsText(file);
+   761→  };
+   762→  input.click();
+   763→}
+   764→
+   765→function getScheduleCell(grade, day) {
+   766→  if (!state.schedule[grade]) state.schedule[grade] = {};
+   767→  if (!state.schedule[grade][day]) {
+   768→    state.schedule[grade][day] = { committees: 0, subject: '', time: DEFAULT_TIMES[grade]||'9:00-10:30' };
+   769→  }
+   770→  return state.schedule[grade][day];
+   771→}
+   772→
+   773→function renderSchedule() {
+   774→  const grid = document.getElementById('schedule-grid');
+   775→  let html = '<div class="sg-header">Grade Blueprint</div>';
+   776→  DAYS.forEach(d => html += `<div class="sg-header">${d}</div>`);
+   777→
+   778→  GRADES.forEach(grade => {
+   779→    html += `<div class="sg-grade">${grade}</div>`;
+   780→    DAYS.forEach(day => {
+   781→      const cell = getScheduleCell(grade, day);
+   782→      const subjOpts = SUBJECTS.map(s => `<option value="${s}" ${cell.subject===s?'selected':''}>${s}</option>`).join('');
+   783→      html += `
+   784→        <div class="sg-cell">
+   785→          <input type="number" min="0" placeholder="Comms" value="${cell.committees||''}" onchange="updateSchedule('${grade}','${day}','committees',this.value)">
+   786→          <select onchange="updateSchedule('${grade}','${day}','subject',this.value)"><option value="">Subject</option>${subjOpts}</select>
+   787→          <input type="text" placeholder="Time Window" value="${cell.time||''}" onchange="updateSchedule('${grade}','${day}','time',this.value)">
+   788→        </div>`;
+   789→    });
+   790→  });
+   791→  grid.innerHTML = html;
+   792→}
+   793→
+   794→function updateSchedule(grade, day, field, value) {
+   795→  if (!state.schedule[grade]) state.schedule[grade] = {};
+   796→  if (!state.schedule[grade][day]) state.schedule[grade][day] = { committees:0, subject:'', time:DEFAULT_TIMES[grade]||'9:00-10:30' };
+   797→  if (field === 'committees') value = parseInt(value)||0;
+   798→  state.schedule[grade][day][field] = value;
+   799→  saveState();
+   800→}
+   801→
+   802→function resetSchedule() {
+   803→  state.schedule = {}; saveState(); renderSchedule();
+   804→}
+   805→
+   806→function parseTimeRange(tStr) {
+   807→  if (!tStr || !tStr.includes('-')) return { start: 540, end: 630, duration: 1.5 };
+   808→  try {
+   809→    let clean = tStr.replace(/\s+/g, '').replace(/—/g, '-').replace(/–/g, '-');
+   810→    const parts = clean.split('-');
+   811→    const toMinutes = (timeString) => {
+   812→      const p = timeString.split(':');
+   813→      let hrs = parseInt(p[0]) || 0;
+   814→      let mins = parseInt(p[1]) || 0;
+   815→      return (hrs * 60) + mins;
+   816→    };
+   817→    let start = toMinutes(parts[0]);
+   818→    let end = toMinutes(parts[1]);
+   819→    if (end <= start) end += 12 * 60;
+   820→    return { start, end, duration: (end - start) / 60 };
+   821→  } catch(e) {
+   822→    return { start: 540, end: 630, duration: 1.5 };
+   823→  }
+   824→}
+   825→
+   826→function renderDistributeStats() {
+   827→  const totalCom = Object.values(state.schedule).reduce((acc, days) => acc + Object.values(days).reduce((a,c) => a+(c.committees||0),0), 0);
+   828→  const totalSlots = totalCom * 2;
+   829→  document.getElementById('distribute-stats').innerHTML = `
+   830→    <div class="stat-card"><span class="stat-number">${state.teachers.length}</span><div class="stat-label">Available Pools</div></div>
+   831→    <div class="stat-card"><span class="stat-number">${totalCom}</span><div class="stat-label">Active Rooms Matrix</div></div>
+   832→    <div class="stat-card"><span class="stat-number">${totalSlots}</span><div class="stat-label">Total Task Slots</div></div>
+   833→  `;
+   834→}
+   835→
+   836→// 👑 ANTI-SIMULTANEOUS OVERLAP BALANCED ENGINE v9
+   837→function runDistribution() {
+   838→  if (state.teachers.length === 0) { toast('Error: Registry empty!', 'error'); return; }
+   839→
+   840→  const ruleSubject = document.getElementById('rule-subject').checked;
+   841→  const ruleDayLimit = document.getElementById('rule-daylimit').checked;
+   842→  const ruleNotes = document.getElementById('rule-notes').checked;
+   843→
+   844→  let tracking = {};
+   845→  state.teachers.forEach(t => {
+   846→    tracking[t.id] = { totalComm: 0, totalHours: 0, dayComm: {}, assignedSlots: [] };
+   847→    DAYS.forEach(d => { tracking[t.id].dayComm[d] = 0; });
+   848→  });
+   849→
+   850→  let allSlots = [];
+   851→  DAYS.forEach(day => {
+   852→    GRADES.forEach(grade => {
+   853→      const cell = state.schedule[grade]?.[day];
+   854→      if (cell && cell.committees > 0) {
+   855→        let lowerGrade = grade.toLowerCase();
+   856→        let stage = "any";
+   857→        if(lowerGrade.includes("primary")) stage = "primary";
+   858→        else if(lowerGrade.includes("prep")) stage = "prep";
+   859→        else if(lowerGrade.includes("secondary") || lowerGrade.includes("sec")) stage = "sec";
+   860→
+   861→        let timeInfo = parseTimeRange(cell.time);
+   862→        for (let c = 1; c <= cell.committees; c++) {
+   863→          allSlots.push({ day, grade, stage, subject: cell.subject, time: cell.time, timeInfo, comId: c });
+   864→        }
+   865→      }
+   866→    });
+   867→  });
+   868→
+   869→  // Heaviest duration loads calculated first
+   870→  allSlots.sort((a, b) => b.timeInfo.duration - a.timeInfo.duration);
+   871→
+   872→  let finalAssignments = {};
+   873→  DAYS.forEach(d => { finalAssignments[d] = []; });
+   874→  DAYS.forEach(day => {
+   875→    GRADES.forEach(grade => {
+   876→      const cell = state.schedule[grade]?.[day];
+   877→      if (cell && cell.committees > 0) {
+   878→        let existing = finalAssignments[day].find(s => s.grade === grade && s.time === cell.time);
+   879→        if (!existing) {
+   880→          finalAssignments[day].push({ grade, time: cell.time, subject: cell.subject, committees: [] });
+   881→        }
+   882→      }
+   883→    });
+   884→  });
+   885→
+   886→  allSlots.forEach(slot => {
+   887→    
+   888→    let queryTeacher = (blockedId) => {
+   889→      let pool = [];
+   890→
+   891→      state.teachers.forEach(t => {
+   892→        if (blockedId && t.id === blockedId) return; 
+   893→        
+   894→        let tr = tracking[t.id];
+   895→
+   896→        // 1. Subject Block
+   897→        if (ruleSubject && slot.subject && t.subject === slot.subject) return;
+   898→
+   899→        // 2. STRICT time overlap - cannot be in 2 places at same time
+   900→        let hasOverlap = tr.assignedSlots.some(s => {
+   901→          return s.day === slot.day && !(slot.timeInfo.end <= s.start || slot.timeInfo.start >= s.end);
+   902→        });
+   903→        if (hasOverlap) return;
+   904→
+   905→        // 3. Day limit rule
+   906→        if (ruleDayLimit && tr.dayComm[slot.day] >= 1) return;
+   907→
+   908→        // 4. Max 5h per day - count unique hours today
+   909→        let todayHours = 0;
+   910→        let seenToday = new Set();
+   911→        tr.assignedSlots.filter(s => s.day === slot.day).forEach(s => {
+   912→          let k = s.start + '_' + s.end;
+   913→          if (!seenToday.has(k)) { seenToday.add(k); todayHours += (s.end - s.start) / 60; }
+   914→        });
+   915→        if (todayHours + slot.timeInfo.duration > 5) return;
+   916→
+   917→        let matchScore = 0;
+   918→        if (ruleNotes && t.notes && slot.stage !== "any" && t.notes.toLowerCase().includes(slot.stage)) {
+   919→          matchScore = 1;
+   920→        }
+   921→
+   922→        pool.push({ teacher: t, matchScore, totalComm: tr.totalComm, totalHours: tr.totalHours });
+   923→      });
+   924→
+   925→      // Emergency Fallback: relax day limit only, KEEP overlap + max hours
+   926→      if (pool.length === 0) {
+   927→        state.teachers.forEach(t => {
+   928→          if (blockedId && t.id === blockedId) return;
+   929→          let tr = tracking[t.id];
+   930→          if (ruleSubject && slot.subject && t.subject === slot.subject) return;
+   931→          let hasOverlap = tr.assignedSlots.some(s => {
+   932→            return s.day === slot.day && !(slot.timeInfo.end <= s.start || slot.timeInfo.start >= s.end);
+   933→          });
+   934→          if (hasOverlap) return;
+   935→          let todayH = 0; let seenT = new Set();
+   936→          tr.assignedSlots.filter(s => s.day === slot.day).forEach(s => {
+   937→            let k = s.start+'_'+s.end; if(!seenT.has(k)){seenT.add(k); todayH += (s.end-s.start)/60;}
+   938→          });
+   939→          if (todayH + slot.timeInfo.duration > 5) return;
+   940→          pool.push({ teacher: t, matchScore: 0, totalComm: tr.totalComm, totalHours: tr.totalHours });
+   941→        });
+   942→      }
+   943→
+   944→      if (pool.length === 0) return null;
+   945→
+   946→      pool.sort((a, b) => {
+   947→        if (a.totalComm !== b.totalComm) return a.totalComm - b.totalComm;
+   948→        if (Math.abs(a.totalHours - b.totalHours) > 0.001) return a.totalHours - b.totalHours;
+   949→        if (b.matchScore !== a.matchScore) return b.matchScore - a.matchScore;
+   950→        return a.teacher.id - b.teacher.id;
+   951→      });
+   952→
+   953→      return pool[0].teacher;
+   954→    };
+   955→
+   956→    let t1 = queryTeacher(null);
+   957→    if (t1) {
+   958→      tracking[t1.id].totalComm++;
+   959→      tracking[t1.id].dayComm[slot.day]++;
+   960→      tracking[t1.id].totalHours += slot.timeInfo.duration;
+   961→      tracking[t1.id].assignedSlots.push({ day: slot.day, start: slot.timeInfo.start, end: slot.timeInfo.end });
+   962→    }
+   963→
+   964→    let t2 = queryTeacher(t1 ? t1.id : null);
+   965→    if (t2) {
+   966→      tracking[t2.id].totalComm++;
+   967→      tracking[t2.id].dayComm[slot.day]++;
+   968→      tracking[t2.id].totalHours += slot.timeInfo.duration;
+   969→      tracking[t2.id].assignedSlots.push({ day: slot.day, start: slot.timeInfo.start, end: slot.timeInfo.end });
+   970→    }
+   971→
+   972→    let dayGroup = finalAssignments[slot.day];
+   973→    let sessionGroup = dayGroup.find(s => s.grade === slot.grade && s.time === slot.time);
+   974→    if (sessionGroup) {
+   975→      sessionGroup.committees.push({
+   976→        serial: slot.comId,
+   977→        t1: t1 ? { id: t1.id, name: t1.name } : { id: null, name: 'Standby Monitor' },
+   978→        t2: t2 ? { id: t2.id, name: t2.name } : { id: null, name: 'Standby Monitor' }
+   979→      });
+   980→    }
+   981→  });
+   982→
+   983→  state.results = { assignments: finalAssignments, tracking };
+   984→  saveState();
+   985→  toast('Overlap Lock Secured! Schedules fully cleared. ✓', 'success');
+   986→  showPage('results');
+   987→}
+   988→
+   989→function renderResults() {
+   990→  const container = document.getElementById('results-container');
+   991→  if (!state.results.assignments) {
+   992→    container.innerHTML = '<div class="empty-state"><p>Run engine to compute output.</p></div>';
+   993→    return;
+   994→  }
+   995→
+   996→  let html = '';
+   997→  DAYS.forEach(day => {
+   998→    const sessions = state.results.assignments[day] || [];
+   999→    if (sessions.length === 0) return;
+  1000→
+  1001→    html += `
+  1002→    <div class="result-day">
+  1003→      <div class="result-day-header" onclick="toggleDay('${day}')">
+  1004→        <div class="result-day-title">📅 Day: ${day} </div>
+  1005→        <span>View Options ▼</span>
+  1006→      </div>
+  1007→      <div class="result-day-body" id="day-body-${day}" style="display:block">`;
+  1008→
+  1009→    sessions.forEach(session => {
+  1010→      html += `
+  1011→        <div class="result-session">
+  1012→          <div class="result-session-header">
+  1013→            <span class="rs-grade">${session.grade}</span>
+  1014→            <span class="rs-time">⏰ Window: ${session.time}</span>
+  1015→            <span class="rs-subject">📖 Subject: ${session.subject || 'Unassigned'}</span>
+  1016→          </div>
+  1017→          <div>
+  1018→            <div class="result-com" style="background:var(--surface2);font-size:12px;font-weight:600;">
+  1019→              <div class="rc-cell rc-num">Room</div>
+  1020→              <div class="rc-cell">Lead Supervisor</div>
+  1021→              <div class="rc-cell">Associate Supervisor</div>
+  1022→              <div class="rc-cell" style="justify-content:center">Daily Load Check</div>
+  1023→            </div>`;
+  1024→
+  1025→      session.committees.forEach(c => {
+  1026→        let dc1 = c.t1.id ? state.results.tracking[c.t1.id]?.dayComm[day] : 0;
+  1027→        let dc2 = c.t2.id ? state.results.tracking[c.t2.id]?.dayComm[day] : 0;
+  1028→
+  1029→        html += `
+  1030→            <div class="result-com">
+  1031→              <div class="rc-cell rc-num">Room ${c.serial}</div>
+  1032→              <div class="rc-cell">${c.t1.name}</div>
+  1033→              <div class="rc-cell">${c.t2.name}</div>
+  1034→              <div class="rc-cell" style="justify-content:center;font-family:var(--mono);color:var(--text2);font-size:11px;">
+  1035→                ${c.t1.id ? dc1+' Duty' : '-' } / ${c.t2.id ? dc2+' Duty' : '-'}
+  1036→              </div>
+  1037→            </div>`;
+  1038→      });
+  1039→
+  1040→      html += '</div></div>';
+  1041→    });
+  1042→
+  1043→    html += '</div></div>';
+  1044→  });
+  1045→
+  1046→  container.innerHTML = html;
+  1047→}
+  1048→
+  1049→function toggleDay(day) {
+  1050→  const body = document.getElementById('day-body-' + day);
+  1051→  body.style.display = body.style.display === 'none' ? 'block' : 'none';
+  1052→}
+  1053→
+  1054→function renderStats() {
+  1055→  const container = document.getElementById('stats-container');
+  1056→  if (!state.results.tracking || state.teachers.length === 0) {
+  1057→    container.innerHTML = '<div class="empty-state"><p>No analytics to track.</p></div>';
+  1058→    return;
+  1059→  }
+  1060→
+  1061→  const tr = state.results.tracking;
+  1062→
+  1063→  // FIX: Recalculate totalHours from unique time slots only (prevent double counting)
+  1064→  state.teachers.forEach(t => {
+  1065→    if (!tr[t.id]) return;
+  1066→    let slots = tr[t.id].assignedSlots || [];
+  1067→    // Get unique time slots per day (same day+start+end = same slot, count once)
+  1068→    let seen = new Set();
+  1069→    let uniqueHours = 0;
+  1070→    slots.forEach(s => {
+  1071→      let key = s.day + '_' + s.start + '_' + s.end;
+  1072→      if (!seen.has(key)) { seen.add(key); uniqueHours += (s.end - s.start) / 60; }
+  1073→    });
+  1074→    tr[t.id].totalHours = uniqueHours;
+  1075→  });
+  1076→
+  1077→  // Calculate summary numbers
+  1078→  let totalComAll = 0, totalHrsAll = 0, over5Count = 0, notUsedCount = 0;
+  1079→  state.teachers.forEach(t => {
+  1080→    let tt = tr[t.id] || { totalComm: 0, totalHours: 0 };
+  1081→    totalComAll += tt.totalComm || 0;
+  1082→    totalHrsAll += tt.totalHours || 0;
+  1083→    if ((tt.totalHours || 0) > 5) over5Count++;
+  1084→    if ((tt.totalComm || 0) === 0) notUsedCount++;
+  1085→  });
+  1086→  let maxHrs = Math.max(...state.teachers.map(t => tr[t.id]?.totalHours || 0));
+  1087→  let minHrs = Math.min(...state.teachers.filter(t => (tr[t.id]?.totalHours||0)>0).map(t => tr[t.id]?.totalHours || 0));
+  1088→
+  1089→  // Sort by total hours descending
+  1090→  let sorted = [...state.teachers].sort((a,b) => (tr[b.id]?.totalHours||0) - (tr[a.id]?.totalHours||0));
+  1091→
+  1092→  let html = `
+  1093→    <!-- Summary Cards -->
+  1094→    <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:20px">
+  1095→      <div class="stat-card">
+  1096→        <span class="stat-number">${totalHrsAll.toFixed(1)}</span>
+  1097→        <div class="stat-label">Total Hours (All)</div>
+  1098→      </div>
+  1099→      <div class="stat-card">
+  1100→        <span class="stat-number">${(totalHrsAll / Math.max(state.teachers.length,1)).toFixed(1)}</span>
+  1101→        <div class="stat-label">Avg Hours / Teacher</div>
+  1102→      </div>
+  1103→      <div class="stat-card">
+  1104→        <span class="stat-number">${maxHrs.toFixed(1)}</span>
+  1105→        <div class="stat-label">Max Hours (1 Teacher)</div>
+  1106→      </div>
+  1107→      <div class="stat-card">
+  1108→        <span class="stat-number" style="color:var(--danger)">${over5Count}</span>
+  1109→        <div class="stat-label">Over 5h ⚠️</div>
+  1110→      </div>
+  1111→      <div class="stat-card">
+  1112→        <span class="stat-number" style="color:var(--warning)">${notUsedCount}</span>
+  1113→        <div class="stat-label">Not Assigned</div>
+  1114→      </div>
+  1115→    </div>
+  1116→
+  1117→    <!-- Main Table -->
+  1118→    <div class="card">
+  1119→      <div class="card-title" style="margin-bottom:16px">Teacher Hours Summary</div>
+  1120→      <div class="table-wrap">
+  1121→      <table>
+  1122→        <thead>
+  1123→          <tr>
+  1124→            <th>#</th><th>Teacher Name</th><th>Subject</th>
+  1125→            ${DAYS.map(d=>`<th>${d.slice(0,3)}</th>`).join('')}
+  1126→            <th style="background:rgba(0,212,255,0.1)">Total<br>Committees</th>
+  1127→            <th style="background:rgba(0,255,157,0.1);min-width:100px">⏱ Total<br>Hours</th>
+  1128→            <th>Status</th>
+  1129→          </tr>
+  1130→        </thead>
+  1131→        <tbody>`;
+  1132→
+  1133→  sorted.forEach((t, i) => {
+  1134→    let tt = tr[t.id] || { totalComm: 0, totalHours: 0, dayComm: {} };
+  1135→    let hrs = tt.totalHours || 0;
+  1136→    let pct = maxHrs > 0 ? Math.round(hrs / maxHrs * 100) : 0;
+  1137→    let hrsColor = hrs > 5 ? 'var(--danger)' : hrs > 3 ? 'var(--accent3)' : hrs > 0 ? 'var(--accent)' : 'var(--text2)';
+  1138→    let status = hrs === 0 ? '<span class="badge" style="background:rgba(255,68,68,0.1);color:var(--danger)">Not Used</span>'
+  1139→               : hrs > 5   ? '<span class="badge" style="background:rgba(255,68,68,0.1);color:var(--danger)">Over 5h ⚠️</span>'
+  1140→               :              '<span class="badge" style="background:rgba(0,255,157,0.1);color:var(--accent3)">OK ✓</span>';
+  1141→
+  1142→    html += `
+  1143→      <tr>
+  1144→        <td style="color:var(--text2)">${i+1}</td>
+  1145→        <td style="font-weight:600;color:#fff">${t.name}</td>
+  1146→        <td><span class="badge badge-blue">${t.subject}</span></td>
+  1147→        ${DAYS.map(d => {
+  1148→          let val = tt.dayComm[d] || 0;
+  1149→          return `<td style="text-align:center;font-weight:600;color:${val >= 2 ? 'var(--accent2)' : val === 1 ? 'var(--accent3)' : 'var(--text2)'}">${val||'-'}</td>`;
+  1150→        }).join('')}
+  1151→        <td style="text-align:center;font-weight:700;color:var(--accent);font-family:var(--mono)">${tt.totalComm}</td>
+  1152→        <td style="background:rgba(0,255,157,0.03);padding:8px 14px">
+  1153→          <div style="display:flex;align-items:center;gap:8px">
+  1154→            <span style="font-family:var(--mono);font-weight:700;color:${hrsColor};min-width:48px">${hrs.toFixed(1)}h</span>
+  1155→            <div style="flex:1;height:6px;background:var(--border);border-radius:3px;overflow:hidden">
+  1156→              <div style="width:${pct}%;height:100%;background:${hrsColor};border-radius:3px;transition:width 0.3s"></div>
+  1157→            </div>
+  1158→          </div>
+  1159→        </td>
+  1160→        <td>${status}</td>
+  1161→      </tr>`;
+  1162→  });
+  1163→
+  1164→  // Totals row
+  1165→  html += `
+  1166→      <tr style="background:rgba(0,212,255,0.05);font-weight:700">
+  1167→        <td colspan="3" style="color:var(--accent);font-weight:700">TOTAL</td>
+  1168→        ${DAYS.map(d => {
+  1169→          let dayTotal = state.teachers.reduce((a,t) => a+(tr[t.id]?.dayComm[d]||0), 0);
+  1170→          return `<td style="text-align:center;color:var(--accent)">${dayTotal}</td>`;
+  1171→        }).join('')}
+  1172→        <td style="text-align:center;color:var(--accent);font-family:var(--mono)">${totalComAll}</td>
+  1173→        <td style="font-family:var(--mono);font-weight:700;color:var(--accent3);padding:8px 14px">${totalHrsAll.toFixed(1)}h</td>
+  1174→        <td></td>
+  1175→      </tr>`;
+  1176→
+  1177→  html += '</tbody></table></div></div>';
+  1178→  container.innerHTML = html;
+  1179→}
+  1180→
+  1181→function exportResults() {
+  1182→  if (!state.results.assignments) return;
+  1183→  let csv = 'Day,Grade,Time,Subject,Committee,Supervisor1,Supervisor2\n';
+  1184→  DAYS.forEach(day => {
+  1185→    const sessions = state.results.assignments[day] || [];
+  1186→    sessions.forEach(s => {
+  1187→      s.committees.forEach(c => {
+  1188→        csv += `"${day}","${s.grade}","${s.time}","${s.subject || ''}","Room ${c.serial}","${c.t1.name}","${c.t2.name}"\n`;
+  1189→      });
+  1190→    });
+  1191→  });
+  1192→  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  1193→  const url = URL.createObjectURL(blob);
+  1194→  const a = document.createElement('a');
+  1195→  a.href = url; a.download = 'perfect_schedule.csv'; a.click();
+  1196→}
+  1197→
+  1198→function clearAll() {
+  1199→  if (!confirm('Perform dynamic hard reset?')) return;
+  1200→  state = { teachers: [], schedule: {}, results: {}, nextTeacherId: 1 };
+  1201→  saveState(); showPage('teachers');
+  1202→}
+  1203→
+  1204→loadState();
+  1205→showPage('teachers');
+  1206→</script>
+  1207→</body>
+  1208→</html>

@@ -67,7 +67,7 @@ export default function ExamSystem() {
   const [view, setView] = useState<View>('login');
   const [password, setPassword] = useState('');
   const [loginError, setLoginError] = useState('');
-  const [isConnected, setIsConnected] = useState(true); // Assume connected until proven otherwise
+  const [isConnected, setIsConnected] = useState(true);
 
   // Data state
   const [teachers, setTeachers] = useState<Teacher[]>([]);
@@ -103,7 +103,6 @@ export default function ExamSystem() {
       if (res.ok) {
         const data: ScheduleCell[] = await res.json();
         setSchedule(data);
-        // Build buffer
         const buf: Record<string, ScheduleCell> = {};
         data.forEach(c => { buf[`${c.grade}__${c.day}`] = c; });
         setScheduleBuffer(buf);
@@ -135,7 +134,6 @@ export default function ExamSystem() {
 
     const sb = createClient(supabaseUrl, supabaseKey);
 
-    // Subscribe to teachers changes
     const teachersCh = sb.channel('teachers-changes')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'teachers' }, () => {
         loadTeachers();
@@ -144,14 +142,12 @@ export default function ExamSystem() {
         setIsConnected(status === 'SUBSCRIBED');
       });
 
-    // Subscribe to schedule changes
     const scheduleCh = sb.channel('schedule-changes')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'schedule_cells' }, () => {
         loadSchedule();
       })
       .subscribe();
 
-    // Subscribe to results changes
     const resultsCh = sb.channel('results-changes')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'distribution_results' }, () => {
         loadResults();
@@ -174,8 +170,7 @@ export default function ExamSystem() {
       loadAll();
       return;
     }
-    // Admin login
-    if (!password.trim()) { setLoginError('ادخل كلمة السر'); return; }
+    if (!password.trim()) { setLoginError('Enter the admin password'); return; }
     try {
       const res = await fetch('/api/auth', {
         method: 'POST',
@@ -187,9 +182,9 @@ export default function ExamSystem() {
         setView('admin');
         loadAll();
       } else {
-        setLoginError(data.message || 'كلمة السر غلط');
+        setLoginError(data.message || 'Incorrect password');
       }
-    } catch { setLoginError('خطأ في الاتصال'); }
+    } catch { setLoginError('Connection error'); }
   };
 
   const handleLogout = () => {
@@ -203,7 +198,7 @@ export default function ExamSystem() {
 
   // ========== TEACHER ACTIONS ==========
   const saveTeacher = async () => {
-    if (!formName.trim() || !formSubject) { showToast('Fill all required fields', 'error'); return; }
+    if (!formName.trim() || !formSubject) { showToast('Please complete all fields', 'error'); return; }
     try {
       if (editTeacherId) {
         await fetch('/api/teachers', {
@@ -211,14 +206,14 @@ export default function ExamSystem() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ id: editTeacherId, name: formName.trim(), subject: formSubject, notes: formNotes.trim() })
         });
-        showToast('تم تعديل المعلم', 'success');
+        showToast('Teacher updated', 'success');
       } else {
         await fetch('/api/teachers', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ name: formName.trim(), subject: formSubject, notes: formNotes.trim() })
         });
-        showToast('تم إضافة المعلم', 'success');
+        showToast('Teacher added successfully', 'success');
       }
       cancelEdit();
       loadTeachers();
@@ -230,7 +225,7 @@ export default function ExamSystem() {
     try {
       await fetch(`/api/teachers?id=${id}`, { method: 'DELETE' });
       loadTeachers();
-      showToast('تم حذف المعلم', 'success');
+      showToast('Teacher deleted', 'success');
     } catch { showToast('Error deleting', 'error'); }
   };
 
@@ -268,7 +263,7 @@ export default function ExamSystem() {
     try {
       await fetch('/api/distribute', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ teachers: demoTeachers }) });
       loadTeachers();
-      showToast('Added 200 teachers!', 'success');
+      showToast('Injected 200 Mock Teachers Successfully!', 'success');
     } catch { showToast('Error', 'error'); }
   };
 
@@ -325,9 +320,8 @@ export default function ExamSystem() {
 
   // ========== DISTRIBUTION ENGINE ==========
   const runDistribution = () => {
-    if (teachers.length === 0) { showToast('No teachers in registry!', 'error'); return; }
+    if (teachers.length === 0) { showToast('Error: Registry empty!', 'error'); return; }
 
-    // Get rule checkboxes
     const ruleSubject = (document.getElementById('rule-subject') as HTMLInputElement)?.checked ?? true;
     const ruleDayLimit = (document.getElementById('rule-daylimit') as HTMLInputElement)?.checked ?? true;
     const ruleNotes = (document.getElementById('rule-notes') as HTMLInputElement)?.checked ?? true;
@@ -338,7 +332,6 @@ export default function ExamSystem() {
       DAYS.forEach(d => { tracking[t.id].dayComm[d] = 0; });
     });
 
-    // Build all slots
     const allSlots: { day: string; grade: string; stage: string; subject: string; time: string; timeInfo: ReturnType<typeof parseTimeRange>; comId: number }[] = [];
     DAYS.forEach(day => {
       GRADES.forEach(grade => {
@@ -354,7 +347,6 @@ export default function ExamSystem() {
 
     allSlots.sort((a, b) => b.timeInfo.duration - a.timeInfo.duration);
 
-    // Build final assignments
     const finalAssignments: Record<string, SessionResult[]> = {};
     DAYS.forEach(d => { finalAssignments[d] = []; });
     DAYS.forEach(day => {
@@ -429,9 +421,8 @@ export default function ExamSystem() {
     const newResults = { assignments: finalAssignments, tracking };
     setResults(newResults);
 
-    // Save to server
     fetch('/api/results', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: newResults }) });
-    showToast('Distribution complete!', 'success');
+    showToast('Overlap Lock Secured! Schedules fully cleared. ✓', 'success');
     setActivePage('results');
   };
 
@@ -450,16 +441,17 @@ export default function ExamSystem() {
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = url; a.download = 'exam_schedule.csv'; a.click();
+    a.href = url; a.download = 'perfect_schedule.csv'; a.click();
     URL.revokeObjectURL(url);
   };
 
   // ========== RESET ALL ==========
   const resetAll = async () => {
-    if (!confirm('Reset ALL data?')) return;
+    if (!confirm('Perform dynamic hard reset?')) return;
     await fetch('/api/distribute', { method: 'DELETE' });
     loadAll();
     setResults(null);
+    showToast('All data has been reset', 'info');
   };
 
   // ========== RENDER HELPERS ==========
@@ -473,11 +465,14 @@ export default function ExamSystem() {
   // ========== LOGIN SCREEN ==========
   if (view === 'login') {
     return (
-      <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative', zIndex: 1 }}>
+      <div className="app" style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative', zIndex: 1 }}>
+        <style jsx>{`
+          @keyframes pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.4;transform:scale(1.4)} }
+        `}</style>
         <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 16, padding: 48, maxWidth: 440, width: '90%', textAlign: 'center' }}>
           <div style={{ width: 12, height: 12, background: 'var(--accent)', borderRadius: '50%', margin: '0 auto 16px', animation: 'pulse 2s infinite' }} />
           <h1 style={{ fontFamily: 'var(--mono)', fontSize: 16, color: 'var(--accent)', letterSpacing: 2, marginBottom: 8 }}>EXAM · SUPERVISOR</h1>
-          <p style={{ color: 'var(--text2)', fontSize: 13, marginBottom: 32 }}>نظام توزيع لجان الإشراف على الامتحانات</p>
+          <p style={{ color: 'var(--text2)', fontSize: 13, marginBottom: 32 }}>Exam Committee Distribution System</p>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             <button
@@ -486,13 +481,13 @@ export default function ExamSystem() {
               onMouseOver={e => { (e.target as HTMLElement).style.borderColor = 'var(--accent)'; }}
               onMouseOut={e => { (e.target as HTMLElement).style.borderColor = 'var(--border)'; }}
             >
-              👤 دخول كمستخدم
+              👤 Enter as User
             </button>
-            <div style={{ color: 'var(--text2)', fontSize: 11, margin: '4px 0' }}>────── أو ──────</div>
+            <div style={{ color: 'var(--text2)', fontSize: 11, margin: '4px 0' }}>────── or ──────</div>
 
             <input
               type="password"
-              placeholder="كلمة سر الأدمن"
+              placeholder="Admin Password"
               value={password}
               onChange={e => { setPassword(e.target.value); setLoginError(''); }}
               onKeyDown={e => e.key === 'Enter' && handleLogin('admin')}
@@ -505,13 +500,13 @@ export default function ExamSystem() {
               onMouseOver={e => { (e.target as HTMLElement).style.background = '#e55a2b'; }}
               onMouseOut={e => { (e.target as HTMLElement).style.background = 'var(--accent2)'; }}
             >
-              🔐 دخول كأدمن
+              🔐 Enter as Admin
             </button>
           </div>
 
           <div style={{ marginTop: 24, fontSize: 11, color: 'var(--text2)' }}>
             <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: isConnected ? 'var(--success)' : 'var(--danger)', marginRight: 6 }} />
-            {isConnected ? 'متصل بالسيرفر' : 'غير متصل'}
+            {isConnected ? 'Connected' : 'Offline'}
           </div>
         </div>
       </div>
@@ -526,16 +521,16 @@ export default function ExamSystem() {
   const renderTeachersPage = () => (
     <div className="card">
       <div className="card-header">
-        <div className="card-title">سجل المعلمين</div>
+        <div className="card-title">Teacher Registry</div>
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
           {isAdmin && (
             <>
-              <button className="btn btn-demo" onClick={generateDemoTeachers}>🧪 Generate 200 Mock</button>
+              <button className="btn btn-demo" onClick={generateDemoTeachers}>🧪 Generate 200 Mock Teachers</button>
               <button className="btn btn-ghost" onClick={importCSV}>📂 Import CSV</button>
             </>
           )}
-          <button className="btn btn-primary" onClick={() => { if (isAdmin) { cancelEdit(); setShowAddTeacher(!showAddTeacher); } else { cancelEdit(); setShowAddTeacher(!showAddTeacher); } }}>
-            + أضف معلم
+          <button className="btn btn-primary" onClick={() => { cancelEdit(); setShowAddTeacher(!showAddTeacher); }}>
+            + Add New Teacher
           </button>
         </div>
       </div>
@@ -544,30 +539,30 @@ export default function ExamSystem() {
         <div style={{ background: 'var(--surface2)', borderRadius: 10, padding: 20, marginBottom: 20 }}>
           <div className="grid-3">
             <div className="form-group">
-              <label className="form-label">الاسم الكامل</label>
-              <input className="form-input" value={formName} onChange={e => setFormName(e.target.value)} placeholder="e.g. Ahmed Ali" />
+              <label className="form-label">Full Name</label>
+              <input className="form-input" value={formName} onChange={e => setFormName(e.target.value)} placeholder="e.g. John Doe" />
             </div>
             <div className="form-group">
-              <label className="form-label">المادة التخصصية</label>
+              <label className="form-label">Specialist Subject</label>
               <select className="form-select" value={formSubject} onChange={e => setFormSubject(e.target.value)}>
-                <option value="">-- اختر المادة --</option>
+                <option value="">-- Choose Subject --</option>
                 {SUBJECTS.map(s => <option key={s} value={s}>{s}</option>)}
               </select>
             </div>
             <div className="form-group">
-              <label className="form-label">ملاحظات المرحلة</label>
+              <label className="form-label">Stage Assignment Notes</label>
               <input className="form-input" value={formNotes} onChange={e => setFormNotes(e.target.value)} placeholder="e.g. prep, sec, primary" />
             </div>
           </div>
           <div style={{ display: 'flex', gap: 10 }}>
-            <button className="btn btn-primary" onClick={saveTeacher}>✓ حفظ</button>
-            <button className="btn btn-ghost" onClick={cancelEdit}>إلغاء</button>
+            <button className="btn btn-primary" onClick={saveTeacher}>✓ Save Teacher</button>
+            <button className="btn btn-ghost" onClick={cancelEdit}>Cancel</button>
           </div>
         </div>
       )}
 
       <div id="teachers-stats" style={{ display: 'flex', gap: 12, marginBottom: 16, flexWrap: 'wrap' }}>
-        <span className="badge badge-green">الإجمالي: {teachers.length}</span>
+        <span className="badge badge-green">Total Registered: {teachers.length}</span>
         {Object.entries(teachers.reduce((acc: Record<string,number>, t) => { acc[t.subject] = (acc[t.subject]||0)+1; return acc; }, {})).map(([s,c]) => (
           <span key={s} className="badge badge-blue">{s}: {c}</span>
         ))}
@@ -577,13 +572,13 @@ export default function ExamSystem() {
         <table>
           <thead>
             <tr>
-              <th>#</th><th>اسم المعلم</th><th>المادة</th><th>ملاحظات المرحلة</th>
-              {isAdmin && <th>إجراءات</th>}
+              <th>Index</th><th>Teacher Name</th><th>Subject Badge</th><th>Stage Rules</th>
+              {isAdmin && <th>Actions</th>}
             </tr>
           </thead>
           <tbody>
             {teachers.length === 0 ? (
-              <tr><td colSpan={isAdmin ? 5 : 4} style={{ textAlign: 'center', padding: 32 }}>لا يوجد معلمين</td></tr>
+              <tr><td colSpan={isAdmin ? 5 : 4} style={{ textAlign: 'center', padding: 32 }}>No teachers registered</td></tr>
             ) : teachers.map((t, i) => (
               <tr key={t.id}>
                 <td>{i + 1}</td>
@@ -592,8 +587,8 @@ export default function ExamSystem() {
                 <td style={{ color: 'var(--accent3)' }}>{t.notes || 'Any Stage'}</td>
                 {isAdmin && (
                   <td>
-                    <button className="action-btn edit-btn" onClick={() => startEdit(t)}>✏️</button>
-                    <button className="action-btn del-btn" onClick={() => deleteTeacher(t.id)}>✕</button>
+                    <button className="action-btn edit-btn" onClick={() => startEdit(t)}>✏️ Edit</button>
+                    <button className="action-btn del-btn" onClick={() => deleteTeacher(t.id)}>✕ Remove</button>
                   </td>
                 )}
               </tr>
@@ -608,12 +603,15 @@ export default function ExamSystem() {
   const renderSchedulePage = () => (
     <div className="card">
       <div className="card-header">
-        <div className="card-title">خريطة الجدول الامتحاني</div>
-        <button className="btn btn-primary" onClick={saveSchedule}>💾 حفظ الجدول</button>
+        <div className="card-title">Exam Structure Blueprint</div>
+        <div style={{ display: 'flex', gap: 10 }}>
+          <button className="btn btn-primary" onClick={saveSchedule}>💾 Save Blueprint</button>
+          <button className="btn btn-ghost" onClick={resetSchedule}>↺ Reset Matrix</button>
+        </div>
       </div>
       <div className="table-wrap" style={{ maxHeight: '70vh', overflow: 'auto' }}>
         <div className="schedule-grid">
-          <div className="sg-header">المرحلة</div>
+          <div className="sg-header">Grade Blueprint</div>
           {DAYS.map(d => <div key={d} className="sg-header">{d}</div>)}
 
           {GRADES.map(grade => (
@@ -623,12 +621,12 @@ export default function ExamSystem() {
                 const cell = getCell(grade, day);
                 return (
                   <div key={day} className="sg-cell">
-                    <input type="number" min="0" placeholder="لجان" value={cell.committees || ''} onChange={e => updateCell(grade, day, 'committees', parseInt(e.target.value) || 0)} />
+                    <input type="number" min="0" placeholder="Comms" value={cell.committees || ''} onChange={e => updateCell(grade, day, 'committees', parseInt(e.target.value) || 0)} />
                     <select value={cell.subject || ''} onChange={e => updateCell(grade, day, 'subject', e.target.value)}>
-                      <option value="">المادة</option>
+                      <option value="">Subject</option>
                       {SUBJECTS.map(s => <option key={s} value={s}>{s}</option>)}
                     </select>
-                    <input type="text" placeholder="التوقيت" value={cell.time || ''} onChange={e => updateCell(grade, day, 'time', e.target.value)} />
+                    <input type="text" placeholder="Time Window" value={cell.time || ''} onChange={e => updateCell(grade, day, 'time', e.target.value)} />
                   </div>
                 );
               })}
@@ -643,34 +641,34 @@ export default function ExamSystem() {
   const renderDistributePage = () => (
     <>
       <div className="grid-4" style={{ marginBottom: 24 }}>
-        <div className="stat-card"><span className="stat-number">{teachers.length}</span><div className="stat-label">المعلمين المتاحين</div></div>
-        <div className="stat-card"><span className="stat-number">{totalCommittees}</span><div className="stat-label">اللجان الفعالة</div></div>
-        <div className="stat-card"><span className="stat-number">{totalSlots}</span><div className="stat-label">إجمالي المهام</div></div>
+        <div className="stat-card"><span className="stat-number">{teachers.length}</span><div className="stat-label">Available Pools</div></div>
+        <div className="stat-card"><span className="stat-number">{totalCommittees}</span><div className="stat-label">Active Rooms Matrix</div></div>
+        <div className="stat-card"><span className="stat-number">{totalSlots}</span><div className="stat-label">Total Task Slots</div></div>
       </div>
       <div className="card">
-        <div className="card-title" style={{ marginBottom: 16 }}>قيود محرك التوزيع</div>
+        <div className="card-title" style={{ marginBottom: 16 }}>Mathematical Distribution Engine Constraints</div>
         <div className="grid-2">
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
             <label style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, cursor: 'pointer' }}>
               <input type="checkbox" id="rule-subject" defaultChecked style={{ width: 16, height: 16, accentColor: 'var(--accent)' }} />
-              منع الإشراف على مادة التخصص
+              Block Specialty Subjects (Never supervise own exam)
             </label>
             <label style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, cursor: 'pointer' }}>
               <input type="checkbox" id="rule-daylimit" defaultChecked style={{ width: 16, height: 16, accentColor: 'var(--accent)' }} />
-              حد أقصى لجنة واحدة في اليوم
+              Enforce Hard Cap: Strictly Max 1 Committee Per Day
             </label>
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
             <label style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, cursor: 'pointer' }}>
               <input type="checkbox" id="rule-notes" defaultChecked style={{ width: 16, height: 16, accentColor: 'var(--accent)' }} />
-              مطابقة تفضيلات المرحلة
+              Apply Stage Preference Matching (notes field)
             </label>
           </div>
         </div>
       </div>
-      <div style={{ textAlign: 'center', padding: 32 }}>
+      <div className="distribute-btn-wrap">
         <button className="btn btn-orange" onClick={runDistribution}>
-          ⚡ تشغيل محرك التوزيع
+          ⚡ Execute Time-Lock Equalizer Distribution
         </button>
       </div>
     </>
@@ -678,7 +676,7 @@ export default function ExamSystem() {
 
   // ========== RESULTS PAGE ==========
   const renderResultsPage = () => {
-    if (!results?.assignments) return <div className="card"><div style={{ textAlign: 'center', padding: 48, color: 'var(--text2)' }}>شغّل محرك التوزيع لعرض النتائج</div></div>;
+    if (!results?.assignments) return <div className="card"><div className="empty-state"><p>Execute the distribution engine to view results</p></div></div>;
 
     return (
       <div>
@@ -691,33 +689,33 @@ export default function ExamSystem() {
                 const body = document.getElementById('day-body-' + day);
                 if (body) body.style.display = body.style.display === 'none' ? 'block' : 'none';
               }}>
-                <div className="result-day-title">📅 اليوم: {day}</div>
-                <span>عرض ▼</span>
+                <div className="result-day-title">📅 Day: {day} </div>
+                <span>View Options ▼</span>
               </div>
               <div className="result-day-body" id={'day-body-' + day} style={{ display: 'block' }}>
                 {sessions.map((session, si) => (
                   <div key={si} className="result-session">
                     <div className="result-session-header">
                       <span className="rs-grade">{session.grade}</span>
-                      <span className="rs-time">⏰ {session.time}</span>
-                      <span className="rs-subject">📖 {session.subject || 'غير محدد'}</span>
+                      <span className="rs-time">⏰ Window: {session.time}</span>
+                      <span className="rs-subject">📖 Subject: {session.subject || 'Unassigned'}</span>
                     </div>
                     <div className="result-com" style={{ background: 'var(--surface2)', fontSize: 12, fontWeight: 600 }}>
-                      <div className="rc-cell rc-num">اللجنة</div>
-                      <div className="rc-cell">المشرف الأول</div>
-                      <div className="rc-cell">المشرف الثاني</div>
-                      <div className="rc-cell" style={{ justifyContent: 'center' }}>العبء اليومي</div>
+                      <div className="rc-cell rc-num">Room</div>
+                      <div className="rc-cell">Lead Supervisor</div>
+                      <div className="rc-cell">Associate Supervisor</div>
+                      <div className="rc-cell" style={{ justifyContent: 'center' }}>Daily Load Check</div>
                     </div>
                     {session.committees.map((c, ci) => {
                       const dc1 = c.t1.id ? results.tracking[c.t1.id]?.dayComm[day] : 0;
                       const dc2 = c.t2.id ? results.tracking[c.t2.id]?.dayComm[day] : 0;
                       return (
                         <div key={ci} className="result-com">
-                          <div className="rc-cell rc-num">لجنة {c.serial}</div>
+                          <div className="rc-cell rc-num">Room {c.serial}</div>
                           <div className="rc-cell">{c.t1.name}</div>
                           <div className="rc-cell">{c.t2.name}</div>
                           <div className="rc-cell" style={{ justifyContent: 'center', fontFamily: 'var(--mono)', color: 'var(--text2)', fontSize: 11 }}>
-                            {c.t1.id ? dc1 + ' duty' : '-'} / {c.t2.id ? dc2 + ' duty' : '-'}
+                            {c.t1.id ? dc1 + ' Duty' : '-'} / {c.t2.id ? dc2 + ' Duty' : '-'}
                           </div>
                         </div>
                       );
@@ -734,7 +732,7 @@ export default function ExamSystem() {
 
   // ========== STATS PAGE (Admin Only) ==========
   const renderStatsPage = () => {
-    if (!results?.tracking || teachers.length === 0) return <div className="card"><div style={{ textAlign: 'center', padding: 48, color: 'var(--text2)' }}>لا توجد بيانات</div></div>;
+    if (!results?.tracking || teachers.length === 0) return <div className="card"><div className="empty-state"><p>No analytics to track.</p></div></div>;
 
     const tr = results.tracking;
     // Fix double counting
@@ -764,23 +762,23 @@ export default function ExamSystem() {
     return (
       <>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 12, marginBottom: 20 }}>
-          <div className="stat-card"><span className="stat-number">{totalHrsAll.toFixed(1)}</span><div className="stat-label">إجمالي الساعات</div></div>
-          <div className="stat-card"><span className="stat-number">{(totalHrsAll / Math.max(teachers.length, 1)).toFixed(1)}</span><div className="stat-label">متوسط / معلم</div></div>
-          <div className="stat-card"><span className="stat-number">{maxHrs.toFixed(1)}</span><div className="stat-label">أعلى ساعات</div></div>
-          <div className="stat-card"><span className="stat-number" style={{ color: 'var(--danger)' }}>{over5Count}</span><div className="stat-label">أكثر من 5 ساعات</div></div>
-          <div className="stat-card"><span className="stat-number" style={{ color: 'var(--warning)' }}>{notUsedCount}</span><div className="stat-label">لم يتم تعيينه</div></div>
+          <div className="stat-card"><span className="stat-number">{totalHrsAll.toFixed(1)}</span><div className="stat-label">Total Hours (All)</div></div>
+          <div className="stat-card"><span className="stat-number">{(totalHrsAll / Math.max(teachers.length, 1)).toFixed(1)}</span><div className="stat-label">Avg Hours / Teacher</div></div>
+          <div className="stat-card"><span className="stat-number">{maxHrs.toFixed(1)}</span><div className="stat-label">Max Hours (1 Teacher)</div></div>
+          <div className="stat-card"><span className="stat-number" style={{ color: 'var(--danger)' }}>{over5Count}</span><div className="stat-label">Over 5h ⚠️</div></div>
+          <div className="stat-card"><span className="stat-number" style={{ color: 'var(--warning)' }}>{notUsedCount}</span><div className="stat-label">Not Assigned</div></div>
         </div>
         <div className="card">
-          <div className="card-title" style={{ marginBottom: 16 }}>ملخص ساعات المعلمين</div>
+          <div className="card-title" style={{ marginBottom: 16 }}>Teacher Hours Summary</div>
           <div className="table-wrap" style={{ maxHeight: '70vh', overflow: 'auto' }}>
             <table>
               <thead>
                 <tr>
-                  <th>#</th><th>الاسم</th><th>المادة</th>
+                  <th>#</th><th>Teacher Name</th><th>Subject</th>
                   {DAYS.map(d => <th key={d}>{d.slice(0, 3)}</th>)}
-                  <th style={{ background: 'rgba(0,212,255,0.1)' }}>اللجان<br/>الإجمالي</th>
-                  <th style={{ background: 'rgba(0,255,157,0.1)' }}>الساعات<br/>الإجمالي</th>
-                  <th>الحالة</th>
+                  <th style={{ background: 'rgba(0,212,255,0.1)' }}>Total<br/>Committees</th>
+                  <th style={{ background: 'rgba(0,255,157,0.1)', minWidth: 100 }}>⏱ Total<br/>Hours</th>
+                  <th>Status</th>
                 </tr>
               </thead>
               <tbody>
@@ -789,9 +787,9 @@ export default function ExamSystem() {
                   const hrs = tt.totalHours || 0;
                   const pct = maxHrs > 0 ? Math.round(hrs / maxHrs * 100) : 0;
                   const hrsColor = hrs > 5 ? 'var(--danger)' : hrs > 3 ? 'var(--accent3)' : hrs > 0 ? 'var(--accent)' : 'var(--text2)';
-                  const status = hrs === 0 ? <span className="badge" style={{ background: 'rgba(255,68,68,0.1)', color: 'var(--danger)' }}>غير مستخدم</span>
-                    : hrs > 5 ? <span className="badge" style={{ background: 'rgba(255,68,68,0.1)', color: 'var(--danger)' }}>⚠️ أكثر من 5س</span>
-                    : <span className="badge" style={{ background: 'rgba(0,255,157,0.1)', color: 'var(--accent3)' }}>✓ OK</span>;
+                  const status = hrs === 0 ? <span className="badge" style={{ background: 'rgba(255,68,68,0.1)', color: 'var(--danger)' }}>Not Used</span>
+                    : hrs > 5 ? <span className="badge" style={{ background: 'rgba(255,68,68,0.1)', color: 'var(--danger)' }}>Over 5h ⚠️</span>
+                    : <span className="badge" style={{ background: 'rgba(0,255,157,0.1)', color: 'var(--accent3)' }}>OK ✓</span>;
                   return (
                     <tr key={t.id}>
                       <td style={{ color: 'var(--text2)' }}>{i + 1}</td>
@@ -815,7 +813,7 @@ export default function ExamSystem() {
                   );
                 })}
                 <tr style={{ background: 'rgba(0,212,255,0.05)', fontWeight: 700 }}>
-                  <td colSpan={3} style={{ color: 'var(--accent)', fontWeight: 700 }}>الإجمالي</td>
+                  <td colSpan={3} style={{ color: 'var(--accent)', fontWeight: 700 }}>TOTAL</td>
                   {DAYS.map(d => {
                     const dayTotal = teachers.reduce((a, t) => a + (tr[t.id]?.dayComm[d] || 0), 0);
                     return <td key={d} style={{ textAlign: 'center', color: 'var(--accent)' }}>{dayTotal}</td>;
@@ -834,53 +832,41 @@ export default function ExamSystem() {
 
   // ========== MAIN APP RENDER ==========
   const pages: { key: Page; label: string; adminOnly: boolean }[] = [
-    { key: 'teachers', label: '👨‍🏫 المعلمين', adminOnly: false },
-    { key: 'schedule', label: '📅 الجدول', adminOnly: false },
-    { key: 'distribute', label: '⚡ التوزيع', adminOnly: true },
-    { key: 'results', label: '📋 النتائج', adminOnly: false },
-    { key: 'stats', label: '📊 الإحصائيات', adminOnly: true },
+    { key: 'teachers', label: '👨‍🏫 Teachers', adminOnly: false },
+    { key: 'schedule', label: '📅 Schedule', adminOnly: false },
+    { key: 'distribute', label: '⚡ Distribute', adminOnly: true },
+    { key: 'results', label: '📋 Results', adminOnly: false },
+    { key: 'stats', label: '📊 Statistics Load Ledger', adminOnly: true },
   ];
 
   const visiblePages = pages.filter(p => !p.adminOnly || isAdmin);
 
   return (
-    <div style={{ position: 'relative', zIndex: 1, minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
+    <div className="app">
       {/* Header */}
-      <header style={{
-        background: 'linear-gradient(135deg, #0d1b2e 0%, #0a1628 100%)',
-        borderBottom: '1px solid var(--border)',
-        padding: '0 32px',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        height: 64,
-        position: 'sticky',
-        top: 0,
-        zIndex: 100,
-        backdropFilter: 'blur(20px)'
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, fontFamily: 'var(--mono)', fontSize: 14, color: 'var(--accent)', letterSpacing: 2 }}>
-          <div style={{ width: 8, height: 8, background: 'var(--accent)', borderRadius: '50%', animation: 'pulse 2s infinite' }} />
-          EXAM · SUPERVISOR · ONLINE
+      <header>
+        <div className="logo">
+          <div className="logo-dot" />
+          EXAM · SUPERVISOR · TIME-LOCK · EQUALIZER · v9
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        <div className="header-actions">
           <span className="badge" style={{ background: `${roleColor}22`, color: roleColor }}>{roleLabel}</span>
           <span style={{ fontSize: 11, display: 'flex', alignItems: 'center', gap: 4 }}>
             <span style={{ width: 6, height: 6, borderRadius: '50%', background: isConnected ? 'var(--success)' : 'var(--danger)' }} />
             {isConnected ? 'Live' : 'Offline'}
           </span>
           {isAdmin && (
-            <button className="btn btn-ghost" onClick={exportCSV}>📥 Export</button>
+            <button className="btn btn-ghost" onClick={exportCSV}>📥 Export CSV</button>
           )}
           {isAdmin && (
-            <button className="btn btn-ghost" onClick={resetAll}>🗑 Reset</button>
+            <button className="btn btn-ghost" onClick={resetAll}>🗑 Reset All</button>
           )}
-          <button className="btn btn-ghost" onClick={handleLogout}>🚪 خروج</button>
+          <button className="btn btn-ghost" onClick={handleLogout}>🚪 Logout</button>
         </div>
       </header>
 
       {/* Nav Tabs */}
-      <div style={{ display: 'flex', gap: 0, background: 'var(--surface)', borderBottom: '1px solid var(--border)', padding: '0 32px', overflowX: 'auto' }}>
+      <div className="nav-tabs">
         {visiblePages.map(p => (
           <div
             key={p.key}
@@ -893,11 +879,11 @@ export default function ExamSystem() {
       </div>
 
       {/* Main Content */}
-      <main style={{ padding: '28px 32px', maxWidth: 1400, margin: '0 auto', width: '100%', flex: 1 }}>
+      <main className="main">
         {loading ? (
           <div style={{ textAlign: 'center', padding: 64, color: 'var(--text2)' }}>
             <div style={{ width: 24, height: 24, border: '2px solid var(--border)', borderTopColor: 'var(--accent)', borderRadius: '50%', animation: 'spin 0.8s linear infinite', margin: '0 auto 12px' }} />
-            جاري التحميل...
+            Loading...
           </div>
         ) : (
           <>
@@ -913,17 +899,80 @@ export default function ExamSystem() {
       {/* Toast */}
       <div id="app-toast" className="toast" />
 
-      {/* Inline styles for components not in globals */}
       <style jsx>{`
+        @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@300;400;500;600;700&display=swap');
+
         @keyframes pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.4;transform:scale(1.4)} }
         @keyframes spin { to { transform: rotate(360deg); } }
-        .nav-tab { padding: 14px 24px; font-size: 13px; font-weight: 500; color: var(--text2); cursor: pointer; border-bottom: 2px solid transparent; transition: all 0.2s; white-space: nowrap; user-select: none; }
+
+        .app { position: relative; z-index: 1; }
+
+        header {
+          background: linear-gradient(135deg, #0d1b2e 0%, #0a1628 100%);
+          border-bottom: 1px solid var(--border);
+          padding: 0 32px;
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          height: 64px;
+          position: sticky;
+          top: 0;
+          z-index: 100;
+          backdrop-filter: blur(20px);
+        }
+
+        .logo {
+          display: flex;
+          align-items: center;
+          gap: 12px;
+          font-family: var(--mono);
+          font-size: 14px;
+          color: var(--accent);
+          letter-spacing: 2px;
+          text-transform: uppercase;
+        }
+
+        .logo-dot {
+          width: 8px;
+          height: 8px;
+          background: var(--accent);
+          border-radius: 50%;
+          animation: pulse 2s infinite;
+        }
+
+        .header-actions { display: flex; gap: 12px; align-items: center; }
+
+        .nav-tabs {
+          display: flex;
+          gap: 0;
+          background: var(--surface);
+          border-bottom: 1px solid var(--border);
+          padding: 0 32px;
+          overflow-x: auto;
+        }
+
+        .nav-tab {
+          padding: 14px 24px;
+          font-size: 13px;
+          font-weight: 500;
+          color: var(--text2);
+          cursor: pointer;
+          border-bottom: 2px solid transparent;
+          transition: all 0.2s;
+          white-space: nowrap;
+          user-select: none;
+        }
+
         .nav-tab:hover { color: var(--text); }
         .nav-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+        .main { padding: 28px 32px; max-width: 1400px; margin: 0 auto; }
+
         .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 24px; margin-bottom: 20px; }
         .card-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; flex-wrap: wrap; gap: 12px; }
         .card-title { font-size: 15px; font-weight: 600; color: var(--text); display: flex; align-items: center; gap: 10px; }
         .card-title::before { content:''; width: 3px; height: 18px; background: var(--accent); border-radius: 2px; }
+
         .btn { display: inline-flex; align-items: center; gap: 8px; padding: 9px 18px; border-radius: 8px; font-size: 13px; font-weight: 500; cursor: pointer; border: none; transition: all 0.2s; font-family: var(--sans); }
         .btn-primary { background: var(--accent); color: #000; }
         .btn-primary:hover { background: #00b8d9; transform:translateY(-1px); }
@@ -933,53 +982,75 @@ export default function ExamSystem() {
         .btn-ghost:hover { color:var(--text); border-color: var(--accent); }
         .btn-orange { background: var(--accent2); color: #fff; padding: 12px 32px; font-size: 15px; font-weight: 600; }
         .btn-orange:hover { background: #e55a2b; transform:translateY(-2px); box-shadow: 0 8px 24px rgba(255,107,53,0.3); }
+
         .table-wrap { overflow-x: auto; }
         table { width: 100%; border-collapse: collapse; font-size: 13px; }
         thead th { background: var(--surface2); padding: 10px 14px; text-align: left; font-weight: 600; color: var(--text2); font-size: 12px; border-bottom: 1px solid var(--border); white-space: nowrap; }
         tbody tr { border-bottom: 1px solid rgba(30,58,95,0.5); transition: background 0.15s; }
         tbody tr:hover { background: rgba(0,212,255,0.03); }
         tbody td { padding: 10px 14px; color: var(--text); vertical-align: middle; }
+
         .form-group { margin-bottom: 16px; }
         .form-label { display: block; font-size: 12px; font-weight: 500; color: var(--text2); margin-bottom: 6px; }
         .form-input, .form-select { width: 100%; padding: 9px 13px; background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; color: var(--text); font-size: 13px; font-family: var(--sans); }
+
         .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
         .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; }
         .grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+
         .stat-card { background: var(--surface2); border: 1px solid var(--border); border-radius: 10px; padding: 20px; text-align: center; }
         .stat-number { font-family: var(--mono); font-size: 28px; font-weight: 600; color: var(--accent); display: block; }
         .stat-label { font-size: 12px; color: var(--text2); margin-top: 4px; }
+
         .badge { display: inline-block; padding: 3px 10px; border-radius: 20px; font-size: 11px; font-weight: 600; }
         .badge-blue { background:rgba(0,212,255,0.15); color:var(--accent); }
         .badge-orange { background:rgba(255,107,53,0.15); color:var(--accent2); }
         .badge-green { background:rgba(0,255,157,0.15); color:var(--accent3); }
         .badge-red { background:rgba(255,68,68,0.15); color:var(--danger); }
+
         .action-btn { background: none; border: none; cursor: pointer; font-size: 14px; padding: 4px 8px; border-radius: 4px; }
         .del-btn { color: var(--danger); }
         .edit-btn { color: var(--accent); margin-right: 6px; }
+
         .schedule-grid { display: grid; grid-template-columns: 160px repeat(6, 1fr); gap: 4px; font-size: 12px; }
         .sg-header { background: var(--surface2); padding: 10px 8px; text-align: center; font-weight: 600; color: var(--accent); border-radius: 6px; }
         .sg-grade { background: var(--surface2); padding: 10px 12px; font-weight: 500; border-radius: 6px; display: flex; align-items: center; }
         .sg-cell { background: var(--surface2); border-radius: 6px; padding: 6px; display: flex; flex-direction: column; gap: 4px; }
-        .sg-cell input, .sg-cell select { width: 100%; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; color: var(--text); font-size: 11px; padding: 4px 6px; font-family: var(--sans); }
+        .sg-cell input[type="number"] { width: 100%; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; color: var(--text); font-size: 12px; padding: 4px 6px; text-align: center; font-family: var(--sans); }
+        .sg-cell select, .sg-cell input[type="text"] { width: 100%; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; color: var(--text); font-size: 11px; padding: 4px 6px; font-family: var(--sans); }
+
         .result-day { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; margin-bottom: 16px; overflow: hidden; }
         .result-day-header { background: var(--surface2); padding: 14px 20px; display: flex; align-items: center; justify-content: space-between; cursor: pointer; }
         .result-day-title { font-weight: 600; font-size: 14px; color: var(--accent); display: flex; align-items: center; gap: 10px; }
         .result-day-body { padding: 16px 20px; }
+
         .result-session { margin-bottom: 16px; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
         .result-session-header { background: rgba(0,212,255,0.05); padding: 10px 16px; display: flex; gap: 20px; align-items: center; font-size: 12px; }
         .rs-grade { font-weight: 600; color: var(--text); }
         .rs-time { color: var(--accent); font-family: var(--mono); }
         .rs-subject { color: var(--accent2); }
+
         .result-com { display: grid; grid-template-columns: 60px 1fr 1fr 100px; gap: 0; font-size: 12px; }
         .rc-cell { padding: 8px 12px; border-bottom: 1px solid rgba(30,58,95,0.4); display: flex; align-items: center; }
         .rc-num { color: var(--text2); font-family: var(--mono); justify-content: center; }
+        .rc-double { background: rgba(255,107,53,0.1); color: var(--accent2); font-weight: 600; }
+
+        .distribute-btn-wrap { text-align: center; padding: 32px; }
+        .empty-state { text-align: center; padding: 48px; color: var(--text2); }
+
         .toast { position: fixed; bottom: 28px; left: 50%; transform: translateX(-50%) translateY(100px); background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 14px 24px; font-size: 14px; z-index: 999; transition: transform 0.3s ease; min-width: 300px; text-align: center; }
         .toast.show { transform: translateX(-50%) translateY(0); }
         .toast.success { border-color: var(--success); color: var(--success); }
         .toast.error { border-color: var(--danger); color: var(--danger); }
+
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: var(--bg); }
+        ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
         @media (max-width: 768px) {
           header { padding: 0 16px; }
-          main { padding: 16px; }
+          .main { padding: 16px; }
+          .nav-tabs { padding: 0 16px; }
           .grid-3, .grid-4 { grid-template-columns: 1fr; }
           .grid-2 { grid-template-columns: 1fr; }
           .schedule-grid { grid-template-columns: 120px repeat(6, minmax(80px, 1fr)); }
@@ -989,4 +1060,3 @@ export default function ExamSystem() {
     </div>
   );
 }
-

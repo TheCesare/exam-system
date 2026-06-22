@@ -1,0 +1,474 @@
+     1→   520→
+     2→   521→  const isAdmin = view === 'admin';
+     3→   522→  const roleLabel = isAdmin ? 'ADMIN' : 'USER';
+     4→   523→  const roleColor = isAdmin ? 'var(--accent2)' : 'var(--accent3)';
+     5→   524→
+     6→   525→  // ========== TEACHERS PAGE ==========
+     7→   526→  const renderTeachersPage = () => (
+     8→   527→    <div className="card">
+     9→   528→      <div className="card-header">
+    10→   529→        <div className="card-title">سجل المعلمين</div>
+    11→   530→        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+    12→   531→          {isAdmin && (
+    13→   532→            <>
+    14→   533→              <button className="btn btn-demo" onClick={generateDemoTeachers}>🧪 Generate 200 Mock</button>
+    15→   534→              <button className="btn btn-ghost" onClick={importCSV}>📂 Import CSV</button>
+    16→   535→            </>
+    17→   536→          )}
+    18→   537→          <button className="btn btn-primary" onClick={() => { if (isAdmin) { cancelEdit(); setShowAddTeacher(!showAddTeacher); } else { cancelEdit(); setShowAddTeacher(!showAddTeacher); } }}>
+    19→   538→            + أضف معلم
+    20→   539→          </button>
+    21→   540→        </div>
+    22→   541→      </div>
+    23→   542→
+    24→   543→      {showAddTeacher && (
+    25→   544→        <div style={{ background: 'var(--surface2)', borderRadius: 10, padding: 20, marginBottom: 20 }}>
+    26→   545→          <div className="grid-3">
+    27→   546→            <div className="form-group">
+    28→   547→              <label className="form-label">الاسم الكامل</label>
+    29→   548→              <input className="form-input" value={formName} onChange={e => setFormName(e.target.value)} placeholder="e.g. Ahmed Ali" />
+    30→   549→            </div>
+    31→   550→            <div className="form-group">
+    32→   551→              <label className="form-label">المادة التخصصية</label>
+    33→   552→              <select className="form-select" value={formSubject} onChange={e => setFormSubject(e.target.value)}>
+    34→   553→                <option value="">-- اختر المادة --</option>
+    35→   554→                {SUBJECTS.map(s => <option key={s} value={s}>{s}</option>)}
+    36→   555→              </select>
+    37→   556→            </div>
+    38→   557→            <div className="form-group">
+    39→   558→              <label className="form-label">ملاحظات المرحلة</label>
+    40→   559→              <input className="form-input" value={formNotes} onChange={e => setFormNotes(e.target.value)} placeholder="e.g. prep, sec, primary" />
+    41→   560→            </div>
+    42→   561→          </div>
+    43→   562→          <div style={{ display: 'flex', gap: 10 }}>
+    44→   563→            <button className="btn btn-primary" onClick={saveTeacher}>✓ حفظ</button>
+    45→   564→            <button className="btn btn-ghost" onClick={cancelEdit}>إلغاء</button>
+    46→   565→          </div>
+    47→   566→        </div>
+    48→   567→      )}
+    49→   568→
+    50→   569→      <div id="teachers-stats" style={{ display: 'flex', gap: 12, marginBottom: 16, flexWrap: 'wrap' }}>
+    51→   570→        <span className="badge badge-green">الإجمالي: {teachers.length}</span>
+    52→   571→        {Object.entries(teachers.reduce((acc: Record<string,number>, t) => { acc[t.subject] = (acc[t.subject]||0)+1; return acc; }, {})).map(([s,c]) => (
+    53→   572→          <span key={s} className="badge badge-blue">{s}: {c}</span>
+    54→   573→        ))}
+    55→   574→      </div>
+    56→   575→
+    57→   576→      <div className="table-wrap">
+    58→   577→        <table>
+    59→   578→          <thead>
+    60→   579→            <tr>
+    61→   580→              <th>#</th><th>اسم المعلم</th><th>المادة</th><th>ملاحظات المرحلة</th>
+    62→   581→              {isAdmin && <th>إجراءات</th>}
+    63→   582→            </tr>
+    64→   583→          </thead>
+    65→   584→          <tbody>
+    66→   585→            {teachers.length === 0 ? (
+    67→   586→              <tr><td colSpan={isAdmin ? 5 : 4} style={{ textAlign: 'center', padding: 32 }}>لا يوجد معلمين</td></tr>
+    68→   587→            ) : teachers.map((t, i) => (
+    69→   588→              <tr key={t.id}>
+    70→   589→                <td>{i + 1}</td>
+    71→   590→                <td style={{ fontWeight: 600, color: '#fff' }}>{t.name}</td>
+    72→   591→                <td><span className="badge badge-blue">{t.subject}</span></td>
+    73→   592→                <td style={{ color: 'var(--accent3)' }}>{t.notes || 'Any Stage'}</td>
+    74→   593→                {isAdmin && (
+    75→   594→                  <td>
+    76→   595→                    <button className="action-btn edit-btn" onClick={() => startEdit(t)}>✏️</button>
+    77→   596→                    <button className="action-btn del-btn" onClick={() => deleteTeacher(t.id)}>✕</button>
+    78→   597→                  </td>
+    79→   598→                )}
+    80→   599→              </tr>
+    81→   600→            ))}
+    82→   601→          </tbody>
+    83→   602→        </table>
+    84→   603→      </div>
+    85→   604→    </div>
+    86→   605→  );
+    87→   606→
+    88→   607→  // ========== SCHEDULE PAGE ==========
+    89→   608→  const renderSchedulePage = () => (
+    90→   609→    <div className="card">
+    91→   610→      <div className="card-header">
+    92→   611→        <div className="card-title">خريطة الجدول الامتحاني</div>
+    93→   612→        <button className="btn btn-primary" onClick={saveSchedule}>💾 حفظ الجدول</button>
+    94→   613→      </div>
+    95→   614→      <div className="table-wrap" style={{ maxHeight: '70vh', overflow: 'auto' }}>
+    96→   615→        <div className="schedule-grid">
+    97→   616→          <div className="sg-header">المرحلة</div>
+    98→   617→          {DAYS.map(d => <div key={d} className="sg-header">{d}</div>)}
+    99→   618→
+   100→   619→          {GRADES.map(grade => (
+   101→   620→            <React.Fragment key={grade}>
+   102→   621→              <div className="sg-grade">{grade}</div>
+   103→   622→              {DAYS.map(day => {
+   104→   623→                const cell = getCell(grade, day);
+   105→   624→                return (
+   106→   625→                  <div key={day} className="sg-cell">
+   107→   626→                    <input type="number" min="0" placeholder="لجان" value={cell.committees || ''} onChange={e => updateCell(grade, day, 'committees', parseInt(e.target.value) || 0)} />
+   108→   627→                    <select value={cell.subject || ''} onChange={e => updateCell(grade, day, 'subject', e.target.value)}>
+   109→   628→                      <option value="">المادة</option>
+   110→   629→                      {SUBJECTS.map(s => <option key={s} value={s}>{s}</option>)}
+   111→   630→                    </select>
+   112→   631→                    <input type="text" placeholder="التوقيت" value={cell.time || ''} onChange={e => updateCell(grade, day, 'time', e.target.value)} />
+   113→   632→                  </div>
+   114→   633→                );
+   115→   634→              })}
+   116→   635→            </React.Fragment>
+   117→   636→          ))}
+   118→   637→        </div>
+   119→   638→      </div>
+   120→   639→    </div>
+   121→   640→  );
+   122→   641→
+   123→   642→  // ========== DISTRIBUTE PAGE (Admin Only) ==========
+   124→   643→  const renderDistributePage = () => (
+   125→   644→    <>
+   126→   645→      <div className="grid-4" style={{ marginBottom: 24 }}>
+   127→   646→        <div className="stat-card"><span className="stat-number">{teachers.length}</span><div className="stat-label">المعلمين المتاحين</div></div>
+   128→   647→        <div className="stat-card"><span className="stat-number">{totalCommittees}</span><div className="stat-label">اللجان الفعالة</div></div>
+   129→   648→        <div className="stat-card"><span className="stat-number">{totalSlots}</span><div className="stat-label">إجمالي المهام</div></div>
+   130→   649→      </div>
+   131→   650→      <div className="card">
+   132→   651→        <div className="card-title" style={{ marginBottom: 16 }}>قيود محرك التوزيع</div>
+   133→   652→        <div className="grid-2">
+   134→   653→          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+   135→   654→            <label style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, cursor: 'pointer' }}>
+   136→   655→              <input type="checkbox" id="rule-subject" defaultChecked style={{ width: 16, height: 16, accentColor: 'var(--accent)' }} />
+   137→   656→              منع الإشراف على مادة التخصص
+   138→   657→            </label>
+   139→   658→            <label style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, cursor: 'pointer' }}>
+   140→   659→              <input type="checkbox" id="rule-daylimit" defaultChecked style={{ width: 16, height: 16, accentColor: 'var(--accent)' }} />
+   141→   660→              حد أقصى لجنة واحدة في اليوم
+   142→   661→            </label>
+   143→   662→          </div>
+   144→   663→          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+   145→   664→            <label style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, cursor: 'pointer' }}>
+   146→   665→              <input type="checkbox" id="rule-notes" defaultChecked style={{ width: 16, height: 16, accentColor: 'var(--accent)' }} />
+   147→   666→              مطابقة تفضيلات المرحلة
+   148→   667→            </label>
+   149→   668→          </div>
+   150→   669→        </div>
+   151→   670→      </div>
+   152→   671→      <div style={{ textAlign: 'center', padding: 32 }}>
+   153→   672→        <button className="btn btn-orange" onClick={runDistribution}>
+   154→   673→          ⚡ تشغيل محرك التوزيع
+   155→   674→        </button>
+   156→   675→      </div>
+   157→   676→    </>
+   158→   677→  );
+   159→   678→
+   160→   679→  // ========== RESULTS PAGE ==========
+   161→   680→  const renderResultsPage = () => {
+   162→   681→    if (!results?.assignments) return <div className="card"><div style={{ textAlign: 'center', padding: 48, color: 'var(--text2)' }}>شغّل محرك التوزيع لعرض النتائج</div></div>;
+   163→   682→
+   164→   683→    return (
+   165→   684→      <div>
+   166→   685→        {DAYS.map(day => {
+   167→   686→          const sessions = results.assignments[day] || [];
+   168→   687→          if (sessions.length === 0) return null;
+   169→   688→          return (
+   170→   689→            <div key={day} className="result-day">
+   171→   690→              <div className="result-day-header" onClick={() => {
+   172→   691→                const body = document.getElementById('day-body-' + day);
+   173→   692→                if (body) body.style.display = body.style.display === 'none' ? 'block' : 'none';
+   174→   693→              }}>
+   175→   694→                <div className="result-day-title">📅 اليوم: {day}</div>
+   176→   695→                <span>عرض ▼</span>
+   177→   696→              </div>
+   178→   697→              <div className="result-day-body" id={'day-body-' + day} style={{ display: 'block' }}>
+   179→   698→                {sessions.map((session, si) => (
+   180→   699→                  <div key={si} className="result-session">
+   181→   700→                    <div className="result-session-header">
+   182→   701→                      <span className="rs-grade">{session.grade}</span>
+   183→   702→                      <span className="rs-time">⏰ {session.time}</span>
+   184→   703→                      <span className="rs-subject">📖 {session.subject || 'غير محدد'}</span>
+   185→   704→                    </div>
+   186→   705→                    <div className="result-com" style={{ background: 'var(--surface2)', fontSize: 12, fontWeight: 600 }}>
+   187→   706→                      <div className="rc-cell rc-num">اللجنة</div>
+   188→   707→                      <div className="rc-cell">المشرف الأول</div>
+   189→   708→                      <div className="rc-cell">المشرف الثاني</div>
+   190→   709→                      <div className="rc-cell" style={{ justifyContent: 'center' }}>العبء اليومي</div>
+   191→   710→                    </div>
+   192→   711→                    {session.committees.map((c, ci) => {
+   193→   712→                      const dc1 = c.t1.id ? results.tracking[c.t1.id]?.dayComm[day] : 0;
+   194→   713→                      const dc2 = c.t2.id ? results.tracking[c.t2.id]?.dayComm[day] : 0;
+   195→   714→                      return (
+   196→   715→                        <div key={ci} className="result-com">
+   197→   716→                          <div className="rc-cell rc-num">لجنة {c.serial}</div>
+   198→   717→                          <div className="rc-cell">{c.t1.name}</div>
+   199→   718→                          <div className="rc-cell">{c.t2.name}</div>
+   200→   719→                          <div className="rc-cell" style={{ justifyContent: 'center', fontFamily: 'var(--mono)', color: 'var(--text2)', fontSize: 11 }}>
+   201→   720→                            {c.t1.id ? dc1 + ' duty' : '-'} / {c.t2.id ? dc2 + ' duty' : '-'}
+   202→   721→                          </div>
+   203→   722→                        </div>
+   204→   723→                      );
+   205→   724→                    })}
+   206→   725→                  </div>
+   207→   726→                ))}
+   208→   727→              </div>
+   209→   728→            </div>
+   210→   729→          );
+   211→   730→        })}
+   212→   731→      </div>
+   213→   732→    );
+   214→   733→  };
+   215→   734→
+   216→   735→  // ========== STATS PAGE (Admin Only) ==========
+   217→   736→  const renderStatsPage = () => {
+   218→   737→    if (!results?.tracking || teachers.length === 0) return <div className="card"><div style={{ textAlign: 'center', padding: 48, color: 'var(--text2)' }}>لا توجد بيانات</div></div>;
+   219→   738→
+   220→   739→    const tr = results.tracking;
+   221→   740→    // Fix double counting
+   222→   741→    teachers.forEach(t => {
+   223→   742→      if (!tr[t.id]) return;
+   224→   743→      const slots = tr[t.id].assignedSlots || [];
+   225→   744→      const seen = new Set<string>();
+   226→   745→      let uniqueHours = 0;
+   227→   746→      slots.forEach(s => {
+   228→   747→        const key = s.day + '_' + s.start + '_' + s.end;
+   229→   748→        if (!seen.has(key)) { seen.add(key); uniqueHours += (s.end - s.start) / 60; }
+   230→   749→      });
+   231→   750→      tr[t.id].totalHours = uniqueHours;
+   232→   751→    });
+   233→   752→
+   234→   753→    let totalComAll = 0, totalHrsAll = 0, over5Count = 0, notUsedCount = 0;
+   235→   754→    teachers.forEach(t => {
+   236→   755→      const tt = tr[t.id] || { totalComm: 0, totalHours: 0 };
+   237→   756→      totalComAll += tt.totalComm || 0;
+   238→   757→      totalHrsAll += tt.totalHours || 0;
+   239→   758→      if ((tt.totalHours || 0) > 5) over5Count++;
+   240→   759→      if ((tt.totalComm || 0) === 0) notUsedCount++;
+   241→   760→    });
+   242→   761→    const maxHrs = Math.max(...teachers.map(t => tr[t.id]?.totalHours || 0));
+   243→   762→    const sorted = [...teachers].sort((a, b) => (tr[b.id]?.totalHours || 0) - (tr[a.id]?.totalHours || 0));
+   244→   763→
+   245→   764→    return (
+   246→   765→      <>
+   247→   766→        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 12, marginBottom: 20 }}>
+   248→   767→          <div className="stat-card"><span className="stat-number">{totalHrsAll.toFixed(1)}</span><div className="stat-label">إجمالي الساعات</div></div>
+   249→   768→          <div className="stat-card"><span className="stat-number">{(totalHrsAll / Math.max(teachers.length, 1)).toFixed(1)}</span><div className="stat-label">متوسط / معلم</div></div>
+   250→   769→          <div className="stat-card"><span className="stat-number">{maxHrs.toFixed(1)}</span><div className="stat-label">أعلى ساعات</div></div>
+   251→   770→          <div className="stat-card"><span className="stat-number" style={{ color: 'var(--danger)' }}>{over5Count}</span><div className="stat-label">أكثر من 5 ساعات</div></div>
+   252→   771→          <div className="stat-card"><span className="stat-number" style={{ color: 'var(--warning)' }}>{notUsedCount}</span><div className="stat-label">لم يتم تعيينه</div></div>
+   253→   772→        </div>
+   254→   773→        <div className="card">
+   255→   774→          <div className="card-title" style={{ marginBottom: 16 }}>ملخص ساعات المعلمين</div>
+   256→   775→          <div className="table-wrap" style={{ maxHeight: '70vh', overflow: 'auto' }}>
+   257→   776→            <table>
+   258→   777→              <thead>
+   259→   778→                <tr>
+   260→   779→                  <th>#</th><th>الاسم</th><th>المادة</th>
+   261→   780→                  {DAYS.map(d => <th key={d}>{d.slice(0, 3)}</th>)}
+   262→   781→                  <th style={{ background: 'rgba(0,212,255,0.1)' }}>اللجان<br/>الإجمالي</th>
+   263→   782→                  <th style={{ background: 'rgba(0,255,157,0.1)' }}>الساعات<br/>الإجمالي</th>
+   264→   783→                  <th>الحالة</th>
+   265→   784→                </tr>
+   266→   785→              </thead>
+   267→   786→              <tbody>
+   268→   787→                {sorted.map((t, i) => {
+   269→   788→                  const tt = tr[t.id] || { totalComm: 0, totalHours: 0, dayComm: {} };
+   270→   789→                  const hrs = tt.totalHours || 0;
+   271→   790→                  const pct = maxHrs > 0 ? Math.round(hrs / maxHrs * 100) : 0;
+   272→   791→                  const hrsColor = hrs > 5 ? 'var(--danger)' : hrs > 3 ? 'var(--accent3)' : hrs > 0 ? 'var(--accent)' : 'var(--text2)';
+   273→   792→                  const status = hrs === 0 ? <span className="badge" style={{ background: 'rgba(255,68,68,0.1)', color: 'var(--danger)' }}>غير مستخدم</span>
+   274→   793→                    : hrs > 5 ? <span className="badge" style={{ background: 'rgba(255,68,68,0.1)', color: 'var(--danger)' }}>⚠️ أكثر من 5س</span>
+   275→   794→                    : <span className="badge" style={{ background: 'rgba(0,255,157,0.1)', color: 'var(--accent3)' }}>✓ OK</span>;
+   276→   795→                  return (
+   277→   796→                    <tr key={t.id}>
+   278→   797→                      <td style={{ color: 'var(--text2)' }}>{i + 1}</td>
+   279→   798→                      <td style={{ fontWeight: 600, color: '#fff' }}>{t.name}</td>
+   280→   799→                      <td><span className="badge badge-blue">{t.subject}</span></td>
+   281→   800→                      {DAYS.map(d => {
+   282→   801→                        const val = tt.dayComm[d] || 0;
+   283→   802→                        return <td key={d} style={{ textAlign: 'center', fontWeight: 600, color: val >= 2 ? 'var(--accent2)' : val === 1 ? 'var(--accent3)' : 'var(--text2)' }}>{val || '-'}</td>;
+   284→   803→                      })}
+   285→   804→                      <td style={{ textAlign: 'center', fontWeight: 700, color: 'var(--accent)', fontFamily: 'var(--mono)' }}>{tt.totalComm}</td>
+   286→   805→                      <td style={{ background: 'rgba(0,255,157,0.03)', padding: '8px 14px' }}>
+   287→   806→                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+   288→   807→                          <span style={{ fontFamily: 'var(--mono)', fontWeight: 700, color: hrsColor, minWidth: 48 }}>{hrs.toFixed(1)}h</span>
+   289→   808→                          <div style={{ flex: 1, height: 6, background: 'var(--border)', borderRadius: 3, overflow: 'hidden' }}>
+   290→   809→                            <div style={{ width: `${pct}%`, height: '100%', background: hrsColor, borderRadius: 3, transition: 'width 0.3s' }} />
+   291→   810→                          </div>
+   292→   811→                        </div>
+   293→   812→                      </td>
+   294→   813→                      <td>{status}</td>
+   295→   814→                    </tr>
+   296→   815→                  );
+   297→   816→                })}
+   298→   817→                <tr style={{ background: 'rgba(0,212,255,0.05)', fontWeight: 700 }}>
+   299→   818→                  <td colSpan={3} style={{ color: 'var(--accent)', fontWeight: 700 }}>الإجمالي</td>
+   300→   819→                  {DAYS.map(d => {
+   301→   820→                    const dayTotal = teachers.reduce((a, t) => a + (tr[t.id]?.dayComm[d] || 0), 0);
+   302→   821→                    return <td key={d} style={{ textAlign: 'center', color: 'var(--accent)' }}>{dayTotal}</td>;
+   303→   822→                  })}
+   304→   823→                  <td style={{ textAlign: 'center', color: 'var(--accent)', fontFamily: 'var(--mono)' }}>{totalComAll}</td>
+   305→   824→                  <td style={{ fontFamily: 'var(--mono)', fontWeight: 700, color: 'var(--accent3)', padding: '8px 14px' }}>{totalHrsAll.toFixed(1)}h</td>
+   306→   825→                  <td></td>
+   307→   826→                </tr>
+   308→   827→              </tbody>
+   309→   828→            </table>
+   310→   829→          </div>
+   311→   830→        </div>
+   312→   831→      </>
+   313→   832→    );
+   314→   833→  };
+   315→   834→
+   316→   835→  // ========== MAIN APP RENDER ==========
+   317→   836→  const pages: { key: Page; label: string; adminOnly: boolean }[] = [
+   318→   837→    { key: 'teachers', label: '👨‍🏫 المعلمين', adminOnly: false },
+   319→   838→    { key: 'schedule', label: '📅 الجدول', adminOnly: false },
+   320→   839→    { key: 'distribute', label: '⚡ التوزيع', adminOnly: true },
+   321→   840→    { key: 'results', label: '📋 النتائج', adminOnly: false },
+   322→   841→    { key: 'stats', label: '📊 الإحصائيات', adminOnly: true },
+   323→   842→  ];
+   324→   843→
+   325→   844→  const visiblePages = pages.filter(p => !p.adminOnly || isAdmin);
+   326→   845→
+   327→   846→  return (
+   328→   847→    <div style={{ position: 'relative', zIndex: 1, minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
+   329→   848→      {/* Header */}
+   330→   849→      <header style={{
+   331→   850→        background: 'linear-gradient(135deg, #0d1b2e 0%, #0a1628 100%)',
+   332→   851→        borderBottom: '1px solid var(--border)',
+   333→   852→        padding: '0 32px',
+   334→   853→        display: 'flex',
+   335→   854→        alignItems: 'center',
+   336→   855→        justifyContent: 'space-between',
+   337→   856→        height: 64,
+   338→   857→        position: 'sticky',
+   339→   858→        top: 0,
+   340→   859→        zIndex: 100,
+   341→   860→        backdropFilter: 'blur(20px)'
+   342→   861→      }}>
+   343→   862→        <div style={{ display: 'flex', alignItems: 'center', gap: 12, fontFamily: 'var(--mono)', fontSize: 14, color: 'var(--accent)', letterSpacing: 2 }}>
+   344→   863→          <div style={{ width: 8, height: 8, background: 'var(--accent)', borderRadius: '50%', animation: 'pulse 2s infinite' }} />
+   345→   864→          EXAM · SUPERVISOR · ONLINE
+   346→   865→        </div>
+   347→   866→        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+   348→   867→          <span className="badge" style={{ background: `${roleColor}22`, color: roleColor }}>{roleLabel}</span>
+   349→   868→          <span style={{ fontSize: 11, display: 'flex', alignItems: 'center', gap: 4 }}>
+   350→   869→            <span style={{ width: 6, height: 6, borderRadius: '50%', background: isConnected ? 'var(--success)' : 'var(--danger)' }} />
+   351→   870→            {isConnected ? 'Live' : 'Offline'}
+   352→   871→          </span>
+   353→   872→          {isAdmin && (
+   354→   873→            <button className="btn btn-ghost" onClick={exportCSV}>📥 Export</button>
+   355→   874→          )}
+   356→   875→          {isAdmin && (
+   357→   876→            <button className="btn btn-ghost" onClick={resetAll}>🗑 Reset</button>
+   358→   877→          )}
+   359→   878→          <button className="btn btn-ghost" onClick={handleLogout}>🚪 خروج</button>
+   360→   879→        </div>
+   361→   880→      </header>
+   362→   881→
+   363→   882→      {/* Nav Tabs */}
+   364→   883→      <div style={{ display: 'flex', gap: 0, background: 'var(--surface)', borderBottom: '1px solid var(--border)', padding: '0 32px', overflowX: 'auto' }}>
+   365→   884→        {visiblePages.map(p => (
+   366→   885→          <div
+   367→   886→            key={p.key}
+   368→   887→            className={'nav-tab' + (activePage === p.key ? ' active' : '')}
+   369→   888→            onClick={() => setActivePage(p.key)}
+   370→   889→          >
+   371→   890→            {p.label}
+   372→   891→          </div>
+   373→   892→        ))}
+   374→   893→      </div>
+   375→   894→
+   376→   895→      {/* Main Content */}
+   377→   896→      <main style={{ padding: '28px 32px', maxWidth: 1400, margin: '0 auto', width: '100%', flex: 1 }}>
+   378→   897→        {loading ? (
+   379→   898→          <div style={{ textAlign: 'center', padding: 64, color: 'var(--text2)' }}>
+   380→   899→            <div style={{ width: 24, height: 24, border: '2px solid var(--border)', borderTopColor: 'var(--accent)', borderRadius: '50%', animation: 'spin 0.8s linear infinite', margin: '0 auto 12px' }} />
+   381→   900→            جاري التحميل...
+   382→   901→          </div>
+   383→   902→        ) : (
+   384→   903→          <>
+   385→   904→            {activePage === 'teachers' && renderTeachersPage()}
+   386→   905→            {activePage === 'schedule' && renderSchedulePage()}
+   387→   906→            {activePage === 'distribute' && isAdmin && renderDistributePage()}
+   388→   907→            {activePage === 'results' && renderResultsPage()}
+   389→   908→            {activePage === 'stats' && isAdmin && renderStatsPage()}
+   390→   909→          </>
+   391→   910→        )}
+   392→   911→      </main>
+   393→   912→
+   394→   913→      {/* Toast */}
+   395→   914→      <div id="app-toast" className="toast" />
+   396→   915→
+   397→   916→      {/* Inline styles for components not in globals */}
+   398→   917→      <style jsx>{`
+   399→   918→        @keyframes pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.4;transform:scale(1.4)} }
+   400→   919→        @keyframes spin { to { transform: rotate(360deg); } }
+   401→   920→        .nav-tab { padding: 14px 24px; font-size: 13px; font-weight: 500; color: var(--text2); cursor: pointer; border-bottom: 2px solid transparent; transition: all 0.2s; white-space: nowrap; user-select: none; }
+   402→   921→        .nav-tab:hover { color: var(--text); }
+   403→   922→        .nav-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+   404→   923→        .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 24px; margin-bottom: 20px; }
+   405→   924→        .card-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; flex-wrap: wrap; gap: 12px; }
+   406→   925→        .card-title { font-size: 15px; font-weight: 600; color: var(--text); display: flex; align-items: center; gap: 10px; }
+   407→   926→        .card-title::before { content:''; width: 3px; height: 18px; background: var(--accent); border-radius: 2px; }
+   408→   927→        .btn { display: inline-flex; align-items: center; gap: 8px; padding: 9px 18px; border-radius: 8px; font-size: 13px; font-weight: 500; cursor: pointer; border: none; transition: all 0.2s; font-family: var(--sans); }
+   409→   928→        .btn-primary { background: var(--accent); color: #000; }
+   410→   929→        .btn-primary:hover { background: #00b8d9; transform:translateY(-1px); }
+   411→   930→        .btn-demo { background: #8a2be2; color: #fff; border: 1px solid rgba(255,255,255,0.1); }
+   412→   931→        .btn-demo:hover { background: #9932cc; transform:translateY(-1px); }
+   413→   932→        .btn-ghost { background: transparent; color: var(--text2); border: 1px solid var(--border); }
+   414→   933→        .btn-ghost:hover { color:var(--text); border-color: var(--accent); }
+   415→   934→        .btn-orange { background: var(--accent2); color: #fff; padding: 12px 32px; font-size: 15px; font-weight: 600; }
+   416→   935→        .btn-orange:hover { background: #e55a2b; transform:translateY(-2px); box-shadow: 0 8px 24px rgba(255,107,53,0.3); }
+   417→   936→        .table-wrap { overflow-x: auto; }
+   418→   937→        table { width: 100%; border-collapse: collapse; font-size: 13px; }
+   419→   938→        thead th { background: var(--surface2); padding: 10px 14px; text-align: left; font-weight: 600; color: var(--text2); font-size: 12px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+   420→   939→        tbody tr { border-bottom: 1px solid rgba(30,58,95,0.5); transition: background 0.15s; }
+   421→   940→        tbody tr:hover { background: rgba(0,212,255,0.03); }
+   422→   941→        tbody td { padding: 10px 14px; color: var(--text); vertical-align: middle; }
+   423→   942→        .form-group { margin-bottom: 16px; }
+   424→   943→        .form-label { display: block; font-size: 12px; font-weight: 500; color: var(--text2); margin-bottom: 6px; }
+   425→   944→        .form-input, .form-select { width: 100%; padding: 9px 13px; background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; color: var(--text); font-size: 13px; font-family: var(--sans); }
+   426→   945→        .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+   427→   946→        .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; }
+   428→   947→        .grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+   429→   948→        .stat-card { background: var(--surface2); border: 1px solid var(--border); border-radius: 10px; padding: 20px; text-align: center; }
+   430→   949→        .stat-number { font-family: var(--mono); font-size: 28px; font-weight: 600; color: var(--accent); display: block; }
+   431→   950→        .stat-label { font-size: 12px; color: var(--text2); margin-top: 4px; }
+   432→   951→        .badge { display: inline-block; padding: 3px 10px; border-radius: 20px; font-size: 11px; font-weight: 600; }
+   433→   952→        .badge-blue { background:rgba(0,212,255,0.15); color:var(--accent); }
+   434→   953→        .badge-orange { background:rgba(255,107,53,0.15); color:var(--accent2); }
+   435→   954→        .badge-green { background:rgba(0,255,157,0.15); color:var(--accent3); }
+   436→   955→        .badge-red { background:rgba(255,68,68,0.15); color:var(--danger); }
+   437→   956→        .action-btn { background: none; border: none; cursor: pointer; font-size: 14px; padding: 4px 8px; border-radius: 4px; }
+   438→   957→        .del-btn { color: var(--danger); }
+   439→   958→        .edit-btn { color: var(--accent); margin-right: 6px; }
+   440→   959→        .schedule-grid { display: grid; grid-template-columns: 160px repeat(6, 1fr); gap: 4px; font-size: 12px; }
+   441→   960→        .sg-header { background: var(--surface2); padding: 10px 8px; text-align: center; font-weight: 600; color: var(--accent); border-radius: 6px; }
+   442→   961→        .sg-grade { background: var(--surface2); padding: 10px 12px; font-weight: 500; border-radius: 6px; display: flex; align-items: center; }
+   443→   962→        .sg-cell { background: var(--surface2); border-radius: 6px; padding: 6px; display: flex; flex-direction: column; gap: 4px; }
+   444→   963→        .sg-cell input, .sg-cell select { width: 100%; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; color: var(--text); font-size: 11px; padding: 4px 6px; font-family: var(--sans); }
+   445→   964→        .result-day { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; margin-bottom: 16px; overflow: hidden; }
+   446→   965→        .result-day-header { background: var(--surface2); padding: 14px 20px; display: flex; align-items: center; justify-content: space-between; cursor: pointer; }
+   447→   966→        .result-day-title { font-weight: 600; font-size: 14px; color: var(--accent); display: flex; align-items: center; gap: 10px; }
+   448→   967→        .result-day-body { padding: 16px 20px; }
+   449→   968→        .result-session { margin-bottom: 16px; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+   450→   969→        .result-session-header { background: rgba(0,212,255,0.05); padding: 10px 16px; display: flex; gap: 20px; align-items: center; font-size: 12px; }
+   451→   970→        .rs-grade { font-weight: 600; color: var(--text); }
+   452→   971→        .rs-time { color: var(--accent); font-family: var(--mono); }
+   453→   972→        .rs-subject { color: var(--accent2); }
+   454→   973→        .result-com { display: grid; grid-template-columns: 60px 1fr 1fr 100px; gap: 0; font-size: 12px; }
+   455→   974→        .rc-cell { padding: 8px 12px; border-bottom: 1px solid rgba(30,58,95,0.4); display: flex; align-items: center; }
+   456→   975→        .rc-num { color: var(--text2); font-family: var(--mono); justify-content: center; }
+   457→   976→        .toast { position: fixed; bottom: 28px; left: 50%; transform: translateX(-50%) translateY(100px); background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 14px 24px; font-size: 14px; z-index: 999; transition: transform 0.3s ease; min-width: 300px; text-align: center; }
+   458→   977→        .toast.show { transform: translateX(-50%) translateY(0); }
+   459→   978→        .toast.success { border-color: var(--success); color: var(--success); }
+   460→   979→        .toast.error { border-color: var(--danger); color: var(--danger); }
+   461→   980→        @media (max-width: 768px) {
+   462→   981→          header { padding: 0 16px; }
+   463→   982→          main { padding: 16px; }
+   464→   983→          .grid-3, .grid-4 { grid-template-columns: 1fr; }
+   465→   984→          .grid-2 { grid-template-columns: 1fr; }
+   466→   985→          .schedule-grid { grid-template-columns: 120px repeat(6, minmax(80px, 1fr)); }
+   467→   986→          .result-com { grid-template-columns: 50px 1fr 1fr 80px; font-size: 11px; }
+   468→   987→        }
+   469→   988→      `}</style>
+   470→   989→    </div>
+   471→   990→  );
+   472→   991→}
+   473→   992→
+   474→   993→
