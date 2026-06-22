@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 
-// Admin password - in production use env variable
-const ADMIN_PASSWORD = 'admin123'
+// Admin password from env
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin123'
 
 export async function POST(request: NextRequest) {
   try {
