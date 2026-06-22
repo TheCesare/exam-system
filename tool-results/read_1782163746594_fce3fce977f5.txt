@@ -1,0 +1,1047 @@
+     1→     1→'use client';
+     2→     2→
+     3→     3→import { useEffect, useState, useCallback, useRef } from 'react';
+     4→     4→import { createClient, RealtimeChannel } from '@supabase/supabase-js';
+     5→     5→
+     6→     6→// ========== CONSTANTS ==========
+     7→     7→const DAYS = ['Saturday','Sunday','Monday','Tuesday','Wednesday','Thursday'];
+     8→     8→const GRADES = [
+     9→     9→  'Grade 3 Primary','Grade 4 Primary','Grade 5 Primary','Grade 6 Primary',
+    10→    10→  'Grade 1 Prep','Grade 2 Prep','Grade 1 Secondary','Grade 2 Secondary'
+    11→    11→];
+    12→    12→const SUBJECTS = ['Math','Science','Arabic','English','French','Social Studies',
+    13→    13→                  'Arts','Computer','Library','Religion','Psychology','Admin','Other'];
+    14→    14→const DEFAULT_TIMES: Record<string,string> = {
+    15→    15→  'Grade 3 Primary':'9:00-10:30','Grade 4 Primary':'9:00-10:30',
+    16→    16→  'Grade 5 Primary':'9:00-10:30','Grade 6 Primary':'9:00-10:30',
+    17→    17→  'Grade 1 Prep':'9:00-11:00','Grade 2 Prep':'9:00-11:00',
+    18→    18→  'Grade 1 Secondary':'12:00-14:00','Grade 2 Secondary':'8:30-10:30'
+    19→    19→};
+    20→    20→
+    21→    21→// ========== TYPES ==========
+    22→    22→interface Teacher { id: string; name: string; subject: string; notes: string; }
+    23→    23→interface ScheduleCell { id?: string; grade: string; day: string; committees: number; subject: string; time: string; }
+    24→    24→interface TrackingEntry { totalComm: number; totalHours: number; dayComm: Record<string,number>; assignedSlots: {day:string;start:number;end:number}[]; }
+    25→    25→interface CommitteeResult { serial: number; t1: {id:string|null;name:string}; t2: {id:string|null;name:string}; }
+    26→    26→interface SessionResult { grade: string; time: string; subject: string; committees: CommitteeResult[]; }
+    27→    27→
+    28→    28→type View = 'login' | 'user' | 'admin';
+    29→    29→type Page = 'teachers' | 'schedule' | 'distribute' | 'results' | 'stats';
+    30→    30→
+    31→    31→// ========== HELPERS ==========
+    32→    32→function parseTimeRange(tStr: string) {
+    33→    33→  if (!tStr || !tStr.includes('-')) return { start: 540, end: 630, duration: 1.5 };
+    34→    34→  try {
+    35→    35→    let clean = tStr.replace(/\s+/g, '').replace(/—/g, '-').replace(/–/g, '-');
+    36→    36→    const parts = clean.split('-');
+    37→    37→    const toMinutes = (s: string) => { const p = s.split(':'); return (parseInt(p[0])||0)*60 + (parseInt(p[1])||0); };
+    38→    38→    let start = toMinutes(parts[0]);
+    39→    39→    let end = toMinutes(parts[1]);
+    40→    40→    if (end <= start) end += 720;
+    41→    41→    return { start, end, duration: (end - start) / 60 };
+    42→    42→  } catch { return { start: 540, end: 630, duration: 1.5 }; }
+    43→    43→}
+    44→    44→
+    45→    45→function getStage(grade: string) {
+    46→    46→  const g = grade.toLowerCase();
+    47→    47→  if (g.includes('primary')) return 'primary';
+    48→    48→  if (g.includes('prep')) return 'prep';
+    49→    49→  if (g.includes('secondary') || g.includes('sec')) return 'sec';
+    50→    50→  return 'any';
+    51→    51→}
+    52→    52→
+    53→    53→// ========== TOAST ==========
+    54→    54→let toastTimer: ReturnType<typeof setTimeout> | null = null;
+    55→    55→function showToast(msg: string, type: 'success' | 'error' | 'info' = 'info') {
+    56→    56→  const el = document.getElementById('app-toast');
+    57→    57→  if (!el) return;
+    58→    58→  el.textContent = msg;
+    59→    59→  el.className = 'toast show ' + type;
+    60→    60→  if (toastTimer) clearTimeout(toastTimer);
+    61→    61→  toastTimer = setTimeout(() => { el.className = 'toast'; }, 3000);
+    62→    62→}
+    63→    63→
+    64→    64→// ========== MAIN COMPONENT ==========
+    65→    65→export default function ExamSystem() {
+    66→    66→  // Auth state
+    67→    67→  const [view, setView] = useState<View>('login');
+    68→    68→  const [password, setPassword] = useState('');
+    69→    69→  const [loginError, setLoginError] = useState('');
+    70→    70→  const [isConnected, setIsConnected] = useState(true); // Assume connected until proven otherwise
+    71→    71→
+    72→    72→  // Data state
+    73→    73→  const [teachers, setTeachers] = useState<Teacher[]>([]);
+    74→    74→  const [schedule, setSchedule] = useState<ScheduleCell[]>([]);
+    75→    75→  const [results, setResults] = useState<{ assignments: Record<string, SessionResult[]>; tracking: Record<string, TrackingEntry> } | null>(null);
+    76→    76→
+    77→    77→  // UI state
+    78→    78→  const [activePage, setActivePage] = useState<Page>('teachers');
+    79→    79→  const [showAddTeacher, setShowAddTeacher] = useState(false);
+    80→    80→  const [editTeacherId, setEditTeacherId] = useState<string | null>(null);
+    81→    81→  const [formName, setFormName] = useState('');
+    82→    82→  const [formSubject, setFormSubject] = useState('');
+    83→    83→  const [formNotes, setFormNotes] = useState('');
+    84→    84→  const [loading, setLoading] = useState(true);
+    85→    85→
+    86→    86→  // Schedule edit buffer (local edits before saving)
+    87→    87→  const [scheduleBuffer, setScheduleBuffer] = useState<Record<string, ScheduleCell>>({});
+    88→    88→
+    89→    89→  // Ref for Supabase realtime channels
+    90→    90→  const channelsRef = useRef<RealtimeChannel[]>([]);
+    91→    91→
+    92→    92→  // ========== LOAD DATA ==========
+    93→    93→  const loadTeachers = useCallback(async () => {
+    94→    94→    try {
+    95→    95→      const res = await fetch('/api/teachers');
+    96→    96→      if (res.ok) setTeachers(await res.json());
+    97→    97→    } catch { /* silent */ }
+    98→    98→  }, []);
+    99→    99→
+   100→   100→  const loadSchedule = useCallback(async () => {
+   101→   101→    try {
+   102→   102→      const res = await fetch('/api/schedule');
+   103→   103→      if (res.ok) {
+   104→   104→        const data: ScheduleCell[] = await res.json();
+   105→   105→        setSchedule(data);
+   106→   106→        // Build buffer
+   107→   107→        const buf: Record<string, ScheduleCell> = {};
+   108→   108→        data.forEach(c => { buf[`${c.grade}__${c.day}`] = c; });
+   109→   109→        setScheduleBuffer(buf);
+   110→   110→      }
+   111→   111→    } catch { /* silent */ }
+   112→   112→  }, []);
+   113→   113→
+   114→   114→  const loadResults = useCallback(async () => {
+   115→   115→    try {
+   116→   116→      const res = await fetch('/api/results');
+   117→   117→      if (res.ok) {
+   118→   118→        const data = await res.json();
+   119→   119→        if (data && data.data) setResults(data.data);
+   120→   120→      }
+   121→   121→    } catch { /* silent */ }
+   122→   122→  }, []);
+   123→   123→
+   124→   124→  const loadAll = useCallback(() => {
+   125→   125→    setLoading(true);
+   126→   126→    Promise.all([loadTeachers(), loadSchedule(), loadResults()])
+   127→   127→      .finally(() => setLoading(false));
+   128→   128→  }, [loadTeachers, loadSchedule, loadResults]);
+   129→   129→
+   130→   130→  // ========== SUPABASE REALTIME ==========
+   131→   131→  useEffect(() => {
+   132→   132→    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+   133→   133→    const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+   134→   134→    if (!supabaseUrl || !supabaseKey) return;
+   135→   135→
+   136→   136→    const sb = createClient(supabaseUrl, supabaseKey);
+   137→   137→
+   138→   138→    // Subscribe to teachers changes
+   139→   139→    const teachersCh = sb.channel('teachers-changes')
+   140→   140→      .on('postgres_changes', { event: '*', schema: 'public', table: 'teachers' }, () => {
+   141→   141→        loadTeachers();
+   142→   142→      })
+   143→   143→      .subscribe((status) => {
+   144→   144→        setIsConnected(status === 'SUBSCRIBED');
+   145→   145→      });
+   146→   146→
+   147→   147→    // Subscribe to schedule changes
+   148→   148→    const scheduleCh = sb.channel('schedule-changes')
+   149→   149→      .on('postgres_changes', { event: '*', schema: 'public', table: 'schedule_cells' }, () => {
+   150→   150→        loadSchedule();
+   151→   151→      })
+   152→   152→      .subscribe();
+   153→   153→
+   154→   154→    // Subscribe to results changes
+   155→   155→    const resultsCh = sb.channel('results-changes')
+   156→   156→      .on('postgres_changes', { event: '*', schema: 'public', table: 'distribution_results' }, () => {
+   157→   157→        loadResults();
+   158→   158→      })
+   159→   159→      .subscribe();
+   160→   160→
+   161→   161→    channelsRef.current = [teachersCh, scheduleCh, resultsCh];
+   162→   162→
+   163→   163→    return () => {
+   164→   164→      teachersCh.unsubscribe();
+   165→   165→      scheduleCh.unsubscribe();
+   166→   166→      resultsCh.unsubscribe();
+   167→   167→    };
+   168→   168→  }, [loadTeachers, loadSchedule, loadResults]);
+   169→   169→
+   170→   170→  // ========== AUTH ==========
+   171→   171→  const handleLogin = async (role: 'user' | 'admin') => {
+   172→   172→    if (role === 'user') {
+   173→   173→      setView('user');
+   174→   174→      loadAll();
+   175→   175→      return;
+   176→   176→    }
+   177→   177→    // Admin login
+   178→   178→    if (!password.trim()) { setLoginError('ادخل كلمة السر'); return; }
+   179→   179→    try {
+   180→   180→      const res = await fetch('/api/auth', {
+   181→   181→        method: 'POST',
+   182→   182→        headers: { 'Content-Type': 'application/json' },
+   183→   183→        body: JSON.stringify({ password })
+   184→   184→      });
+   185→   185→      const data = await res.json();
+   186→   186→      if (data.success) {
+   187→   187→        setView('admin');
+   188→   188→        loadAll();
+   189→   189→      } else {
+   190→   190→        setLoginError(data.message || 'كلمة السر غلط');
+   191→   191→      }
+   192→   192→    } catch { setLoginError('خطأ في الاتصال'); }
+   193→   193→  };
+   194→   194→
+   195→   195→  const handleLogout = () => {
+   196→   196→    setView('login');
+   197→   197→    setPassword('');
+   198→   198→    setLoginError('');
+   199→   199→    setTeachers([]);
+   200→   200→    setSchedule([]);
+   201→   201→    setResults(null);
+   202→   202→  };
+   203→   203→
+   204→   204→  // ========== TEACHER ACTIONS ==========
+   205→   205→  const saveTeacher = async () => {
+   206→   206→    if (!formName.trim() || !formSubject) { showToast('Fill all required fields', 'error'); return; }
+   207→   207→    try {
+   208→   208→      if (editTeacherId) {
+   209→   209→        await fetch('/api/teachers', {
+   210→   210→          method: 'PUT',
+   211→   211→          headers: { 'Content-Type': 'application/json' },
+   212→   212→          body: JSON.stringify({ id: editTeacherId, name: formName.trim(), subject: formSubject, notes: formNotes.trim() })
+   213→   213→        });
+   214→   214→        showToast('تم تعديل المعلم', 'success');
+   215→   215→      } else {
+   216→   216→        await fetch('/api/teachers', {
+   217→   217→          method: 'POST',
+   218→   218→          headers: { 'Content-Type': 'application/json' },
+   219→   219→          body: JSON.stringify({ name: formName.trim(), subject: formSubject, notes: formNotes.trim() })
+   220→   220→        });
+   221→   221→        showToast('تم إضافة المعلم', 'success');
+   222→   222→      }
+   223→   223→      cancelEdit();
+   224→   224→      loadTeachers();
+   225→   225→    } catch { showToast('Error saving teacher', 'error'); }
+   226→   226→  };
+   227→   227→
+   228→   228→  const deleteTeacher = async (id: string) => {
+   229→   229→    if (!confirm('Delete this teacher?')) return;
+   230→   230→    try {
+   231→   231→      await fetch(`/api/teachers?id=${id}`, { method: 'DELETE' });
+   232→   232→      loadTeachers();
+   233→   233→      showToast('تم حذف المعلم', 'success');
+   234→   234→    } catch { showToast('Error deleting', 'error'); }
+   235→   235→  };
+   236→   236→
+   237→   237→  const startEdit = (t: Teacher) => {
+   238→   238→    setEditTeacherId(t.id);
+   239→   239→    setFormName(t.name);
+   240→   240→    setFormSubject(t.subject);
+   241→   241→    setFormNotes(t.notes);
+   242→   242→    setShowAddTeacher(true);
+   243→   243→  };
+   244→   244→
+   245→   245→  const cancelEdit = () => {
+   246→   246→    setEditTeacherId(null);
+   247→   247→    setFormName('');
+   248→   248→    setFormSubject('');
+   249→   249→    setFormNotes('');
+   250→   250→    setShowAddTeacher(false);
+   251→   251→  };
+   252→   252→
+   253→   253→  const generateDemoTeachers = async () => {
+   254→   254→    const demoTeachers: { name: string; subject: string; notes: string }[] = [];
+   255→   255→    let count = 1;
+   256→   256→    for (let i = 1; i <= 15; i++) {
+   257→   257→      demoTeachers.push({ name: `Math Specialist Expert T${count++}`, subject: 'Math', notes: i <= 9 ? 'prep, sec' : '' });
+   258→   258→    }
+   259→   259→    for (let i = 1; i <= 45; i++) demoTeachers.push({ name: `English Senior Faculty T${count++}`, subject: 'English', notes: '' });
+   260→   260→    for (let i = 1; i <= 40; i++) demoTeachers.push({ name: `Arabic Lang Professor T${count++}`, subject: 'Arabic', notes: i <= 16 ? 'prep, sec' : '' });
+   261→   261→    for (let i = 1; i <= 9; i++) demoTeachers.push({ name: `French Educator Staff T${count++}`, subject: 'French', notes: '' });
+   262→   262→    for (let i = 1; i <= 8; i++) demoTeachers.push({ name: `Social Studies Instructor T${count++}`, subject: 'Social Studies', notes: i === 1 ? 'prep, sec' : '' });
+   263→   263→    for (let i = 1; i <= 9; i++) demoTeachers.push({ name: `Pure Science Research T${count++}`, subject: 'Science', notes: '' });
+   264→   264→    const otherSubs = ['Arts', 'Computer', 'Library', 'Religion', 'Psychology', 'Admin', 'Other'];
+   265→   265→    for (let i = 1; i <= 74; i++) {
+   266→   266→      demoTeachers.push({ name: `${otherSubs[i % otherSubs.length]} Resource Officer T${count++}`, subject: otherSubs[i % otherSubs.length], notes: '' });
+   267→   267→    }
+   268→   268→    try {
+   269→   269→      await fetch('/api/distribute', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ teachers: demoTeachers }) });
+   270→   270→      loadTeachers();
+   271→   271→      showToast('Added 200 teachers!', 'success');
+   272→   272→    } catch { showToast('Error', 'error'); }
+   273→   273→  };
+   274→   274→
+   275→   275→  const importCSV = () => {
+   276→   276→    const input = document.createElement('input');
+   277→   277→    input.type = 'file'; input.accept = '.csv';
+   278→   278→    input.onchange = async (e) => {
+   279→   279→      const file = (e.target as HTMLInputElement).files?.[0];
+   280→   280→      if (!file) return;
+   281→   281→      const text = await file.text();
+   282→   282→      const lines = text.split('\n');
+   283→   283→      const imported: { name: string; subject: string; notes: string }[] = [];
+   284→   284→      lines.forEach(line => {
+   285→   285→        const parts = line.split(',').map(p => p.trim());
+   286→   286→        if (parts.length >= 2 && parts[0]) imported.push({ name: parts[0], subject: parts[1], notes: parts[2] || '' });
+   287→   287→      });
+   288→   288→      if (imported.length === 0) { showToast('No valid data in CSV', 'error'); return; }
+   289→   289→      try {
+   290→   290→        await fetch('/api/distribute', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ teachers: imported }) });
+   291→   291→        loadTeachers();
+   292→   292→        showToast(`Imported ${imported.length} teachers`, 'success');
+   293→   293→      } catch { showToast('Import error', 'error'); }
+   294→   294→    };
+   295→   295→    input.click();
+   296→   296→  };
+   297→   297→
+   298→   298→  // ========== SCHEDULE ACTIONS ==========
+   299→   299→  const updateCell = (grade: string, day: string, field: 'committees' | 'subject' | 'time', value: string | number) => {
+   300→   300→    const key = `${grade}__${day}`;
+   301→   301→    setScheduleBuffer(prev => ({
+   302→   302→      ...prev,
+   303→   303→      [key]: { ...prev[key], grade, day, [field]: value, id: prev[key]?.id }
+   304→   304→    }));
+   305→   305→  };
+   306→   306→
+   307→   307→  const saveSchedule = async () => {
+   308→   308→    const cells = Object.values(scheduleBuffer);
+   309→   309→    try {
+   310→   310→      await fetch('/api/schedule', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(cells) });
+   311→   311→      showToast('Schedule saved!', 'success');
+   312→   312→      loadSchedule();
+   313→   313→    } catch { showToast('Error saving schedule', 'error'); }
+   314→   314→  };
+   315→   315→
+   316→   316→  const resetSchedule = async () => {
+   317→   317→    if (!confirm('Reset schedule?')) return;
+   318→   318→    setScheduleBuffer({});
+   319→   319→    try {
+   320→   320→      await fetch('/api/schedule', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify([]) });
+   321→   321→      loadSchedule();
+   322→   322→      showToast('Schedule reset', 'info');
+   323→   323→    } catch { /* silent */ }
+   324→   324→  };
+   325→   325→
+   326→   326→  // ========== DISTRIBUTION ENGINE ==========
+   327→   327→  const runDistribution = () => {
+   328→   328→    if (teachers.length === 0) { showToast('No teachers in registry!', 'error'); return; }
+   329→   329→
+   330→   330→    // Get rule checkboxes
+   331→   331→    const ruleSubject = (document.getElementById('rule-subject') as HTMLInputElement)?.checked ?? true;
+   332→   332→    const ruleDayLimit = (document.getElementById('rule-daylimit') as HTMLInputElement)?.checked ?? true;
+   333→   333→    const ruleNotes = (document.getElementById('rule-notes') as HTMLInputElement)?.checked ?? true;
+   334→   334→
+   335→   335→    const tracking: Record<string, TrackingEntry> = {};
+   336→   336→    teachers.forEach(t => {
+   337→   337→      tracking[t.id] = { totalComm: 0, totalHours: 0, dayComm: {} as Record<string,number>, assignedSlots: [] };
+   338→   338→      DAYS.forEach(d => { tracking[t.id].dayComm[d] = 0; });
+   339→   339→    });
+   340→   340→
+   341→   341→    // Build all slots
+   342→   342→    const allSlots: { day: string; grade: string; stage: string; subject: string; time: string; timeInfo: ReturnType<typeof parseTimeRange>; comId: number }[] = [];
+   343→   343→    DAYS.forEach(day => {
+   344→   344→      GRADES.forEach(grade => {
+   345→   345→        const cell = scheduleBuffer[`${grade}__${day}`];
+   346→   346→        if (cell && cell.committees > 0) {
+   347→   347→          const timeInfo = parseTimeRange(cell.time || DEFAULT_TIMES[grade] || '9:00-10:30');
+   348→   348→          for (let c = 1; c <= cell.committees; c++) {
+   349→   349→            allSlots.push({ day, grade, stage: getStage(grade), subject: cell.subject || '', time: cell.time || DEFAULT_TIMES[grade] || '9:00-10:30', timeInfo, comId: c });
+   350→   350→          }
+   351→   351→        }
+   352→   352→      });
+   353→   353→    });
+   354→   354→
+   355→   355→    allSlots.sort((a, b) => b.timeInfo.duration - a.timeInfo.duration);
+   356→   356→
+   357→   357→    // Build final assignments
+   358→   358→    const finalAssignments: Record<string, SessionResult[]> = {};
+   359→   359→    DAYS.forEach(d => { finalAssignments[d] = []; });
+   360→   360→    DAYS.forEach(day => {
+   361→   361→      GRADES.forEach(grade => {
+   362→   362→        const cell = scheduleBuffer[`${grade}__${day}`];
+   363→   363→        if (cell && cell.committees > 0) {
+   364→   364→          const existing = finalAssignments[day].find(s => s.grade === grade && s.time === (cell.time || DEFAULT_TIMES[grade]));
+   365→   365→          if (!existing) {
+   366→   366→            finalAssignments[day].push({ grade, time: cell.time || DEFAULT_TIMES[grade] || '', subject: cell.subject || '', committees: [] });
+   367→   367→          }
+   368→   368→        }
+   369→   369→      });
+   370→   370→    });
+   371→   371→
+   372→   372→    const queryTeacher = (blockedId: string | null) => {
+   373→   373→      let pool: { teacher: Teacher; matchScore: number; totalComm: number; totalHours: number }[] = [];
+   374→   374→      const tryPool = (relaxDayLimit: boolean) => {
+   375→   375→        pool = [];
+   376→   376→        teachers.forEach(t => {
+   377→   377→          if (blockedId && t.id === blockedId) return;
+   378→   378→          const tr = tracking[t.id];
+   379→   379→          if (ruleSubject && t.subject && allSlots.length > 0) { /* will check per slot */ }
+   380→   380→          return;
+   381→   381→        });
+   382→   382→        return pool;
+   383→   383→      };
+   384→   384→
+   385→   385→      return (blockedId: string | null, slot: typeof allSlots[0]) => {
+   386→   386→        let pool: { teacher: Teacher; matchScore: number; totalComm: number; totalHours: number }[] = [];
+   387→   387→
+   388→   388→        const search = (relaxDay: boolean) => {
+   389→   389→          pool = [];
+   390→   390→          teachers.forEach(t => {
+   391→   391→            if (blockedId && t.id === blockedId) return;
+   392→   392→            const tr = tracking[t.id];
+   393→   393→            if (ruleSubject && slot.subject && t.subject === slot.subject) return;
+   394→   394→            let hasOverlap = tr.assignedSlots.some(s => s.day === slot.day && !(slot.timeInfo.end <= s.start || slot.timeInfo.start >= s.end));
+   395→   395→            if (hasOverlap) return;
+   396→   396→            if (!relaxDay && ruleDayLimit && tr.dayComm[slot.day] >= 1) return;
+   397→   397→            let todayHours = 0;
+   398→   398→            const seen = new Set<string>();
+   399→   399→            tr.assignedSlots.filter(s => s.day === slot.day).forEach(s => {
+   400→   400→              const k = s.start + '_' + s.end;
+   401→   401→              if (!seen.has(k)) { seen.add(k); todayHours += (s.end - s.start) / 60; }
+   402→   402→            });
+   403→   403→            if (todayHours + slot.timeInfo.duration > 5) return;
+   404→   404→            let matchScore = 0;
+   405→   405→            if (ruleNotes && t.notes && slot.stage !== 'any' && t.notes.toLowerCase().includes(slot.stage)) matchScore = 1;
+   406→   406→            pool.push({ teacher: t, matchScore, totalComm: tr.totalComm, totalHours: tr.totalHours });
+   407→   407→          });
+   408→   408→        };
+   409→   409→
+   410→   410→        search(false);
+   411→   411→        if (pool.length === 0) search(true); // relax day limit
+   412→   412→        if (pool.length === 0) return null;
+   413→   413→
+   414→   414→        pool.sort((a, b) => {
+   415→   415→          if (a.totalComm !== b.totalComm) return a.totalComm - b.totalComm;
+   416→   416→          if (Math.abs(a.totalHours - b.totalHours) > 0.001) return a.totalHours - b.totalHours;
+   417→   417→          if (b.matchScore !== a.matchScore) return b.matchScore - a.matchScore;
+   418→   418→          return a.teacher.id.localeCompare(b.teacher.id);
+   419→   419→        });
+   420→   420→        return pool[0].teacher;
+   421→   421→      };
+   422→   422→    };
+   423→   423→
+   424→   424→    // Re-define queryTeacher properly
+   425→   425→    const findTeacher = (blockedId: string | null, slot: typeof allSlots[0], relaxDay: boolean = false): Teacher | null => {
+   426→   426→      let pool: { teacher: Teacher; matchScore: number; totalComm: number; totalHours: number }[] = [];
+   427→   427→      teachers.forEach(t => {
+   428→   428→        if (blockedId && t.id === blockedId) return;
+   429→   429→        const tr = tracking[t.id];
+   430→   430→        if (ruleSubject && slot.subject && t.subject === slot.subject) return;
+   431→   431→        const hasOverlap = tr.assignedSlots.some(s => s.day === slot.day && !(slot.timeInfo.end <= s.start || slot.timeInfo.start >= s.end));
+   432→   432→        if (hasOverlap) return;
+   433→   433→        if (!relaxDay && ruleDayLimit && tr.dayComm[slot.day] >= 1) return;
+   434→   434→        let todayHours = 0;
+   435→   435→        const seen = new Set<string>();
+   436→   436→        tr.assignedSlots.filter(s => s.day === slot.day).forEach(s => {
+   437→   437→          const k = s.start + '_' + s.end;
+   438→   438→          if (!seen.has(k)) { seen.add(k); todayHours += (s.end - s.start) / 60; }
+   439→   439→        });
+   440→   440→        if (todayHours + slot.timeInfo.duration > 5) return;
+   441→   441→        let matchScore = 0;
+   442→   442→        if (ruleNotes && t.notes && slot.stage !== 'any' && t.notes.toLowerCase().includes(slot.stage)) matchScore = 1;
+   443→   443→        pool.push({ teacher: t, matchScore, totalComm: tr.totalComm, totalHours: tr.totalHours });
+   444→   444→      });
+   445→   445→      if (pool.length === 0) return null;
+   446→   446→      pool.sort((a, b) => {
+   447→   447→        if (a.totalComm !== b.totalComm) return a.totalComm - b.totalComm;
+   448→   448→        if (Math.abs(a.totalHours - b.totalHours) > 0.001) return a.totalHours - b.totalHours;
+   449→   449→        if (b.matchScore !== a.matchScore) return b.matchScore - a.matchScore;
+   450→   450→        return a.teacher.id.localeCompare(b.teacher.id);
+   451→   451→      });
+   452→   452→      return pool[0].teacher;
+   453→   453→    };
+   454→   454→
+   455→   455→    allSlots.forEach(slot => {
+   456→   456→      const t1 = findTeacher(null, slot, false) || findTeacher(null, slot, true);
+   457→   457→      if (t1) {
+   458→   458→        tracking[t1.id].totalComm++;
+   459→   459→        tracking[t1.id].dayComm[slot.day]++;
+   460→   460→        tracking[t1.id].totalHours += slot.timeInfo.duration;
+   461→   461→        tracking[t1.id].assignedSlots.push({ day: slot.day, start: slot.timeInfo.start, end: slot.timeInfo.end });
+   462→   462→      }
+   463→   463→      const t2 = findTeacher(t1?.id || null, slot, false) || findTeacher(t1?.id || null, slot, true);
+   464→   464→      if (t2) {
+   465→   465→        tracking[t2.id].totalComm++;
+   466→   466→        tracking[t2.id].dayComm[slot.day]++;
+   467→   467→        tracking[t2.id].totalHours += slot.timeInfo.duration;
+   468→   468→        tracking[t2.id].assignedSlots.push({ day: slot.day, start: slot.timeInfo.start, end: slot.timeInfo.end });
+   469→   469→      }
+   470→   470→
+   471→   471→      const dayGroup = finalAssignments[slot.day];
+   472→   472→      const sessionGroup = dayGroup.find(s => s.grade === slot.grade && s.time === slot.time);
+   473→   473→      if (sessionGroup) {
+   474→   474→        sessionGroup.committees.push({
+   475→   475→          serial: slot.comId,
+   476→   476→          t1: t1 ? { id: t1.id, name: t1.name } : { id: null, name: 'Standby Monitor' },
+   477→   477→          t2: t2 ? { id: t2.id, name: t2.name } : { id: null, name: 'Standby Monitor' }
+   478→   478→        });
+   479→   479→      }
+   480→   480→    });
+   481→   481→
+   482→   482→    const newResults = { assignments: finalAssignments, tracking };
+   483→   483→    setResults(newResults);
+   484→   484→
+   485→   485→    // Save to server
+   486→   486→    fetch('/api/results', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: newResults }) });
+   487→   487→    showToast('Distribution complete!', 'success');
+   488→   488→    setActivePage('results');
+   489→   489→  };
+   490→   490→
+   491→   491→  // ========== EXPORT CSV ==========
+   492→   492→  const exportCSV = () => {
+   493→   493→    if (!results?.assignments) return;
+   494→   494→    let csv = 'Day,Grade,Time,Subject,Committee,Supervisor1,Supervisor2\n';
+   495→   495→    DAYS.forEach(day => {
+   496→   496→      const sessions = results.assignments[day] || [];
+   497→   497→      sessions.forEach(s => {
+   498→   498→        s.committees.forEach(c => {
+   499→   499→          csv += `"${day}","${s.grade}","${s.time}","${s.subject || ''}","Room ${c.serial}","${c.t1.name}","${c.t2.name}"\n`;
+   500→   500→        });
+   501→   501→      });
+   502→   502→    });
+   503→   503→    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+   504→   504→    const url = URL.createObjectURL(blob);
+   505→   505→    const a = document.createElement('a');
+   506→   506→    a.href = url; a.download = 'exam_schedule.csv'; a.click();
+   507→   507→    URL.revokeObjectURL(url);
+   508→   508→  };
+   509→   509→
+   510→   510→  // ========== RESET ALL ==========
+   511→   511→  const resetAll = async () => {
+   512→   512→    if (!confirm('Reset ALL data?')) return;
+   513→   513→    await fetch('/api/distribute', { method: 'DELETE' });
+   514→   514→    loadAll();
+   515→   515→    setResults(null);
+   516→   516→  };
+   517→   517→
+   518→   518→  // ========== RENDER HELPERS ==========
+   519→   519→  const getCell = (grade: string, day: string): ScheduleCell => {
+   520→   520→    return scheduleBuffer[`${grade}__${day}`] || { grade, day, committees: 0, subject: '', time: DEFAULT_TIMES[grade] || '9:00-10:30' };
+   521→   521→  };
+   522→   522→
+   523→   523→  const totalCommittees = Object.values(scheduleBuffer).reduce((a, c) => a + (c.committees || 0), 0);
+   524→   524→  const totalSlots = totalCommittees * 2;
+   525→   525→
+   526→   526→  // ========== LOGIN SCREEN ==========
+   527→   527→  if (view === 'login') {
+   528→   528→    return (
+   529→   529→      <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative', zIndex: 1 }}>
+   530→   530→        <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 16, padding: 48, maxWidth: 440, width: '90%', textAlign: 'center' }}>
+   531→   531→          <div style={{ width: 12, height: 12, background: 'var(--accent)', borderRadius: '50%', margin: '0 auto 16px', animation: 'pulse 2s infinite' }} />
+   532→   532→          <h1 style={{ fontFamily: 'var(--mono)', fontSize: 16, color: 'var(--accent)', letterSpacing: 2, marginBottom: 8 }}>EXAM · SUPERVISOR</h1>
+   533→   533→          <p style={{ color: 'var(--text2)', fontSize: 13, marginBottom: 32 }}>نظام توزيع لجان الإشراف على الامتحانات</p>
+   534→   534→
+   535→   535→          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+   536→   536→            <button
+   537→   537→              onClick={() => handleLogin('user')}
+   538→   538→              style={{ padding: '14px 24px', borderRadius: 10, background: 'var(--surface2)', border: '1px solid var(--border)', color: 'var(--text)', fontSize: 15, fontWeight: 600, cursor: 'pointer', fontFamily: 'var(--sans)', transition: 'all 0.2s' }}
+   539→   539→              onMouseOver={e => { (e.target as HTMLElement).style.borderColor = 'var(--accent)'; }}
+   540→   540→              onMouseOut={e => { (e.target as HTMLElement).style.borderColor = 'var(--border)'; }}
+   541→   541→            >
+   542→   542→              👤 دخول كمستخدم
+   543→   543→            </button>
+   544→   544→            <div style={{ color: 'var(--text2)', fontSize: 11, margin: '4px 0' }}>────── أو ──────</div>
+   545→   545→
+   546→   546→            <input
+   547→   547→              type="password"
+   548→   548→              placeholder="كلمة سر الأدمن"
+   549→   549→              value={password}
+   550→   550→              onChange={e => { setPassword(e.target.value); setLoginError(''); }}
+   551→   551→              onKeyDown={e => e.key === 'Enter' && handleLogin('admin')}
+   552→   552→              style={{ padding: '12px 16px', borderRadius: 10, background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text)', fontSize: 14, fontFamily: 'var(--sans)', outline: 'none', textAlign: 'center' }}
+   553→   553→            />
+   554→   554→            {loginError && <p style={{ color: 'var(--danger)', fontSize: 12, margin: '-4px 0 0' }}>{loginError}</p>}
+   555→   555→            <button
+   556→   556→              onClick={() => handleLogin('admin')}
+   557→   557→              style={{ padding: '14px 24px', borderRadius: 10, background: 'var(--accent2)', border: 'none', color: '#fff', fontSize: 15, fontWeight: 600, cursor: 'pointer', fontFamily: 'var(--sans)', transition: 'all 0.2s' }}
+   558→   558→              onMouseOver={e => { (e.target as HTMLElement).style.background = '#e55a2b'; }}
+   559→   559→              onMouseOut={e => { (e.target as HTMLElement).style.background = 'var(--accent2)'; }}
+   560→   560→            >
+   561→   561→              🔐 دخول كأدمن
+   562→   562→            </button>
+   563→   563→          </div>
+   564→   564→
+   565→   565→          <div style={{ marginTop: 24, fontSize: 11, color: 'var(--text2)' }}>
+   566→   566→            <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: isConnected ? 'var(--success)' : 'var(--danger)', marginRight: 6 }} />
+   567→   567→            {isConnected ? 'متصل بالسيرفر' : 'غير متصل'}
+   568→   568→          </div>
+   569→   569→        </div>
+   570→   570→      </div>
+   571→   571→    );
+   572→   572→  }
+   573→   573→
+   574→   574→  const isAdmin = view === 'admin';
+   575→   575→  const roleLabel = isAdmin ? 'ADMIN' : 'USER';
+   576→   576→  const roleColor = isAdmin ? 'var(--accent2)' : 'var(--accent3)';
+   577→   577→
+   578→   578→  // ========== TEACHERS PAGE ==========
+   579→   579→  const renderTeachersPage = () => (
+   580→   580→    <div className="card">
+   581→   581→      <div className="card-header">
+   582→   582→        <div className="card-title">سجل المعلمين</div>
+   583→   583→        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+   584→   584→          {isAdmin && (
+   585→   585→            <>
+   586→   586→              <button className="btn btn-demo" onClick={generateDemoTeachers}>🧪 Generate 200 Mock</button>
+   587→   587→              <button className="btn btn-ghost" onClick={importCSV}>📂 Import CSV</button>
+   588→   588→            </>
+   589→   589→          )}
+   590→   590→          <button className="btn btn-primary" onClick={() => { if (isAdmin) { cancelEdit(); setShowAddTeacher(!showAddTeacher); } else { cancelEdit(); setShowAddTeacher(!showAddTeacher); } }}>
+   591→   591→            + أضف معلم
+   592→   592→          </button>
+   593→   593→        </div>
+   594→   594→      </div>
+   595→   595→
+   596→   596→      {showAddTeacher && (
+   597→   597→        <div style={{ background: 'var(--surface2)', borderRadius: 10, padding: 20, marginBottom: 20 }}>
+   598→   598→          <div className="grid-3">
+   599→   599→            <div className="form-group">
+   600→   600→              <label className="form-label">الاسم الكامل</label>
+   601→   601→              <input className="form-input" value={formName} onChange={e => setFormName(e.target.value)} placeholder="e.g. Ahmed Ali" />
+   602→   602→            </div>
+   603→   603→            <div className="form-group">
+   604→   604→              <label className="form-label">المادة التخصصية</label>
+   605→   605→              <select className="form-select" value={formSubject} onChange={e => setFormSubject(e.target.value)}>
+   606→   606→                <option value="">-- اختر المادة --</option>
+   607→   607→                {SUBJECTS.map(s => <option key={s} value={s}>{s}</option>)}
+   608→   608→              </select>
+   609→   609→            </div>
+   610→   610→            <div className="form-group">
+   611→   611→              <label className="form-label">ملاحظات المرحلة</label>
+   612→   612→              <input className="form-input" value={formNotes} onChange={e => setFormNotes(e.target.value)} placeholder="e.g. prep, sec, primary" />
+   613→   613→            </div>
+   614→   614→          </div>
+   615→   615→          <div style={{ display: 'flex', gap: 10 }}>
+   616→   616→            <button className="btn btn-primary" onClick={saveTeacher}>✓ حفظ</button>
+   617→   617→            <button className="btn btn-ghost" onClick={cancelEdit}>إلغاء</button>
+   618→   618→          </div>
+   619→   619→        </div>
+   620→   620→      )}
+   621→   621→
+   622→   622→      <div id="teachers-stats" style={{ display: 'flex', gap: 12, marginBottom: 16, flexWrap: 'wrap' }}>
+   623→   623→        <span className="badge badge-green">الإجمالي: {teachers.length}</span>
+   624→   624→        {Object.entries(teachers.reduce((acc: Record<string,number>, t) => { acc[t.subject] = (acc[t.subject]||0)+1; return acc; }, {})).map(([s,c]) => (
+   625→   625→          <span key={s} className="badge badge-blue">{s}: {c}</span>
+   626→   626→        ))}
+   627→   627→      </div>
+   628→   628→
+   629→   629→      <div className="table-wrap">
+   630→   630→        <table>
+   631→   631→          <thead>
+   632→   632→            <tr>
+   633→   633→              <th>#</th><th>اسم المعلم</th><th>المادة</th><th>ملاحظات المرحلة</th>
+   634→   634→              {isAdmin && <th>إجراءات</th>}
+   635→   635→            </tr>
+   636→   636→          </thead>
+   637→   637→          <tbody>
+   638→   638→            {teachers.length === 0 ? (
+   639→   639→              <tr><td colSpan={isAdmin ? 5 : 4} style={{ textAlign: 'center', padding: 32 }}>لا يوجد معلمين</td></tr>
+   640→   640→            ) : teachers.map((t, i) => (
+   641→   641→              <tr key={t.id}>
+   642→   642→                <td>{i + 1}</td>
+   643→   643→                <td style={{ fontWeight: 600, color: '#fff' }}>{t.name}</td>
+   644→   644→                <td><span className="badge badge-blue">{t.subject}</span></td>
+   645→   645→                <td style={{ color: 'var(--accent3)' }}>{t.notes || 'Any Stage'}</td>
+   646→   646→                {isAdmin && (
+   647→   647→                  <td>
+   648→   648→                    <button className="action-btn edit-btn" onClick={() => startEdit(t)}>✏️</button>
+   649→   649→                    <button className="action-btn del-btn" onClick={() => deleteTeacher(t.id)}>✕</button>
+   650→   650→                  </td>
+   651→   651→                )}
+   652→   652→              </tr>
+   653→   653→            ))}
+   654→   654→          </tbody>
+   655→   655→        </table>
+   656→   656→      </div>
+   657→   657→    </div>
+   658→   658→  );
+   659→   659→
+   660→   660→  // ========== SCHEDULE PAGE ==========
+   661→   661→  const renderSchedulePage = () => (
+   662→   662→    <div className="card">
+   663→   663→      <div className="card-header">
+   664→   664→        <div className="card-title">خريطة الجدول الامتحاني</div>
+   665→   665→        {isAdmin && <button className="btn btn-primary" onClick={saveSchedule}>💾 حفظ الجدول</button>}
+   666→   666→      </div>
+   667→   667→      <div className="table-wrap" style={{ maxHeight: '70vh', overflow: 'auto' }}>
+   668→   668→        <div className="schedule-grid">
+   669→   669→          <div className="sg-header">المرحلة</div>
+   670→   670→          {DAYS.map(d => <div key={d} className="sg-header">{d}</div>)}
+   671→   671→
+   672→   672→          {GRADES.map(grade => (
+   673→   673→            <React.Fragment key={grade}>
+   674→   674→              <div className="sg-grade">{grade}</div>
+   675→   675→              {DAYS.map(day => {
+   676→   676→                const cell = getCell(grade, day);
+   677→   677→                return (
+   678→   678→                  <div key={day} className="sg-cell">
+   679→   679→                    <input type="number" min="0" placeholder="لجان" value={cell.committees || ''} onChange={e => updateCell(grade, day, 'committees', parseInt(e.target.value) || 0)} />
+   680→   680→                    <select value={cell.subject || ''} onChange={e => updateCell(grade, day, 'subject', e.target.value)}>
+   681→   681→                      <option value="">المادة</option>
+   682→   682→                      {SUBJECTS.map(s => <option key={s} value={s}>{s}</option>)}
+   683→   683→                    </select>
+   684→   684→                    <input type="text" placeholder="التوقيت" value={cell.time || ''} onChange={e => updateCell(grade, day, 'time', e.target.value)} />
+   685→   685→                  </div>
+   686→   686→                );
+   687→   687→              })}
+   688→   688→            </React.Fragment>
+   689→   689→          ))}
+   690→   690→        </div>
+   691→   691→      </div>
+   692→   692→    </div>
+   693→   693→  );
+   694→   694→
+   695→   695→  // ========== DISTRIBUTE PAGE (Admin Only) ==========
+   696→   696→  const renderDistributePage = () => (
+   697→   697→    <>
+   698→   698→      <div className="grid-4" style={{ marginBottom: 24 }}>
+   699→   699→        <div className="stat-card"><span className="stat-number">{teachers.length}</span><div className="stat-label">المعلمين المتاحين</div></div>
+   700→   700→        <div className="stat-card"><span className="stat-number">{totalCommittees}</span><div className="stat-label">اللجان الفعالة</div></div>
+   701→   701→        <div className="stat-card"><span className="stat-number">{totalSlots}</span><div className="stat-label">إجمالي المهام</div></div>
+   702→   702→      </div>
+   703→   703→      <div className="card">
+   704→   704→        <div className="card-title" style={{ marginBottom: 16 }}>قيود محرك التوزيع</div>
+   705→   705→        <div className="grid-2">
+   706→   706→          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+   707→   707→            <label style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, cursor: 'pointer' }}>
+   708→   708→              <input type="checkbox" id="rule-subject" defaultChecked style={{ width: 16, height: 16, accentColor: 'var(--accent)' }} />
+   709→   709→              منع الإشراف على مادة التخصص
+   710→   710→            </label>
+   711→   711→            <label style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, cursor: 'pointer' }}>
+   712→   712→              <input type="checkbox" id="rule-daylimit" defaultChecked style={{ width: 16, height: 16, accentColor: 'var(--accent)' }} />
+   713→   713→              حد أقصى لجنة واحدة في اليوم
+   714→   714→            </label>
+   715→   715→          </div>
+   716→   716→          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+   717→   717→            <label style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, cursor: 'pointer' }}>
+   718→   718→              <input type="checkbox" id="rule-notes" defaultChecked style={{ width: 16, height: 16, accentColor: 'var(--accent)' }} />
+   719→   719→              مطابقة تفضيلات المرحلة
+   720→   720→            </label>
+   721→   721→          </div>
+   722→   722→        </div>
+   723→   723→      </div>
+   724→   724→      <div style={{ textAlign: 'center', padding: 32 }}>
+   725→   725→        <button className="btn btn-orange" onClick={runDistribution}>
+   726→   726→          ⚡ تشغيل محرك التوزيع
+   727→   727→        </button>
+   728→   728→      </div>
+   729→   729→    </>
+   730→   730→  );
+   731→   731→
+   732→   732→  // ========== RESULTS PAGE ==========
+   733→   733→  const renderResultsPage = () => {
+   734→   734→    if (!results?.assignments) return <div className="card"><div style={{ textAlign: 'center', padding: 48, color: 'var(--text2)' }}>شغّل محرك التوزيع لعرض النتائج</div></div>;
+   735→   735→
+   736→   736→    return (
+   737→   737→      <div>
+   738→   738→        {DAYS.map(day => {
+   739→   739→          const sessions = results.assignments[day] || [];
+   740→   740→          if (sessions.length === 0) return null;
+   741→   741→          return (
+   742→   742→            <div key={day} className="result-day">
+   743→   743→              <div className="result-day-header" onClick={() => {
+   744→   744→                const body = document.getElementById('day-body-' + day);
+   745→   745→                if (body) body.style.display = body.style.display === 'none' ? 'block' : 'none';
+   746→   746→              }}>
+   747→   747→                <div className="result-day-title">📅 اليوم: {day}</div>
+   748→   748→                <span>عرض ▼</span>
+   749→   749→              </div>
+   750→   750→              <div className="result-day-body" id={'day-body-' + day} style={{ display: 'block' }}>
+   751→   751→                {sessions.map((session, si) => (
+   752→   752→                  <div key={si} className="result-session">
+   753→   753→                    <div className="result-session-header">
+   754→   754→                      <span className="rs-grade">{session.grade}</span>
+   755→   755→                      <span className="rs-time">⏰ {session.time}</span>
+   756→   756→                      <span className="rs-subject">📖 {session.subject || 'غير محدد'}</span>
+   757→   757→                    </div>
+   758→   758→                    <div className="result-com" style={{ background: 'var(--surface2)', fontSize: 12, fontWeight: 600 }}>
+   759→   759→                      <div className="rc-cell rc-num">اللجنة</div>
+   760→   760→                      <div className="rc-cell">المشرف الأول</div>
+   761→   761→                      <div className="rc-cell">المشرف الثاني</div>
+   762→   762→                      <div className="rc-cell" style={{ justifyContent: 'center' }}>العبء اليومي</div>
+   763→   763→                    </div>
+   764→   764→                    {session.committees.map((c, ci) => {
+   765→   765→                      const dc1 = c.t1.id ? results.tracking[c.t1.id]?.dayComm[day] : 0;
+   766→   766→                      const dc2 = c.t2.id ? results.tracking[c.t2.id]?.dayComm[day] : 0;
+   767→   767→                      return (
+   768→   768→                        <div key={ci} className="result-com">
+   769→   769→                          <div className="rc-cell rc-num">لجنة {c.serial}</div>
+   770→   770→                          <div className="rc-cell">{c.t1.name}</div>
+   771→   771→                          <div className="rc-cell">{c.t2.name}</div>
+   772→   772→                          <div className="rc-cell" style={{ justifyContent: 'center', fontFamily: 'var(--mono)', color: 'var(--text2)', fontSize: 11 }}>
+   773→   773→                            {c.t1.id ? dc1 + ' duty' : '-'} / {c.t2.id ? dc2 + ' duty' : '-'}
+   774→   774→                          </div>
+   775→   775→                        </div>
+   776→   776→                      );
+   777→   777→                    })}
+   778→   778→                  </div>
+   779→   779→                ))}
+   780→   780→              </div>
+   781→   781→            </div>
+   782→   782→          );
+   783→   783→        })}
+   784→   784→      </div>
+   785→   785→    );
+   786→   786→  };
+   787→   787→
+   788→   788→  // ========== STATS PAGE (Admin Only) ==========
+   789→   789→  const renderStatsPage = () => {
+   790→   790→    if (!results?.tracking || teachers.length === 0) return <div className="card"><div style={{ textAlign: 'center', padding: 48, color: 'var(--text2)' }}>لا توجد بيانات</div></div>;
+   791→   791→
+   792→   792→    const tr = results.tracking;
+   793→   793→    // Fix double counting
+   794→   794→    teachers.forEach(t => {
+   795→   795→      if (!tr[t.id]) return;
+   796→   796→      const slots = tr[t.id].assignedSlots || [];
+   797→   797→      const seen = new Set<string>();
+   798→   798→      let uniqueHours = 0;
+   799→   799→      slots.forEach(s => {
+   800→   800→        const key = s.day + '_' + s.start + '_' + s.end;
+   801→   801→        if (!seen.has(key)) { seen.add(key); uniqueHours += (s.end - s.start) / 60; }
+   802→   802→      });
+   803→   803→      tr[t.id].totalHours = uniqueHours;
+   804→   804→    });
+   805→   805→
+   806→   806→    let totalComAll = 0, totalHrsAll = 0, over5Count = 0, notUsedCount = 0;
+   807→   807→    teachers.forEach(t => {
+   808→   808→      const tt = tr[t.id] || { totalComm: 0, totalHours: 0 };
+   809→   809→      totalComAll += tt.totalComm || 0;
+   810→   810→      totalHrsAll += tt.totalHours || 0;
+   811→   811→      if ((tt.totalHours || 0) > 5) over5Count++;
+   812→   812→      if ((tt.totalComm || 0) === 0) notUsedCount++;
+   813→   813→    });
+   814→   814→    const maxHrs = Math.max(...teachers.map(t => tr[t.id]?.totalHours || 0));
+   815→   815→    const sorted = [...teachers].sort((a, b) => (tr[b.id]?.totalHours || 0) - (tr[a.id]?.totalHours || 0));
+   816→   816→
+   817→   817→    return (
+   818→   818→      <>
+   819→   819→        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 12, marginBottom: 20 }}>
+   820→   820→          <div className="stat-card"><span className="stat-number">{totalHrsAll.toFixed(1)}</span><div className="stat-label">إجمالي الساعات</div></div>
+   821→   821→          <div className="stat-card"><span className="stat-number">{(totalHrsAll / Math.max(teachers.length, 1)).toFixed(1)}</span><div className="stat-label">متوسط / معلم</div></div>
+   822→   822→          <div className="stat-card"><span className="stat-number">{maxHrs.toFixed(1)}</span><div className="stat-label">أعلى ساعات</div></div>
+   823→   823→          <div className="stat-card"><span className="stat-number" style={{ color: 'var(--danger)' }}>{over5Count}</span><div className="stat-label">أكثر من 5 ساعات</div></div>
+   824→   824→          <div className="stat-card"><span className="stat-number" style={{ color: 'var(--warning)' }}>{notUsedCount}</span><div className="stat-label">لم يتم تعيينه</div></div>
+   825→   825→        </div>
+   826→   826→        <div className="card">
+   827→   827→          <div className="card-title" style={{ marginBottom: 16 }}>ملخص ساعات المعلمين</div>
+   828→   828→          <div className="table-wrap" style={{ maxHeight: '70vh', overflow: 'auto' }}>
+   829→   829→            <table>
+   830→   830→              <thead>
+   831→   831→                <tr>
+   832→   832→                  <th>#</th><th>الاسم</th><th>المادة</th>
+   833→   833→                  {DAYS.map(d => <th key={d}>{d.slice(0, 3)}</th>)}
+   834→   834→                  <th style={{ background: 'rgba(0,212,255,0.1)' }}>اللجان<br/>الإجمالي</th>
+   835→   835→                  <th style={{ background: 'rgba(0,255,157,0.1)' }}>الساعات<br/>الإجمالي</th>
+   836→   836→                  <th>الحالة</th>
+   837→   837→                </tr>
+   838→   838→              </thead>
+   839→   839→              <tbody>
+   840→   840→                {sorted.map((t, i) => {
+   841→   841→                  const tt = tr[t.id] || { totalComm: 0, totalHours: 0, dayComm: {} };
+   842→   842→                  const hrs = tt.totalHours || 0;
+   843→   843→                  const pct = maxHrs > 0 ? Math.round(hrs / maxHrs * 100) : 0;
+   844→   844→                  const hrsColor = hrs > 5 ? 'var(--danger)' : hrs > 3 ? 'var(--accent3)' : hrs > 0 ? 'var(--accent)' : 'var(--text2)';
+   845→   845→                  const status = hrs === 0 ? <span className="badge" style={{ background: 'rgba(255,68,68,0.1)', color: 'var(--danger)' }}>غير مستخدم</span>
+   846→   846→                    : hrs > 5 ? <span className="badge" style={{ background: 'rgba(255,68,68,0.1)', color: 'var(--danger)' }}>⚠️ أكثر من 5س</span>
+   847→   847→                    : <span className="badge" style={{ background: 'rgba(0,255,157,0.1)', color: 'var(--accent3)' }}>✓ OK</span>;
+   848→   848→                  return (
+   849→   849→                    <tr key={t.id}>
+   850→   850→                      <td style={{ color: 'var(--text2)' }}>{i + 1}</td>
+   851→   851→                      <td style={{ fontWeight: 600, color: '#fff' }}>{t.name}</td>
+   852→   852→                      <td><span className="badge badge-blue">{t.subject}</span></td>
+   853→   853→                      {DAYS.map(d => {
+   854→   854→                        const val = tt.dayComm[d] || 0;
+   855→   855→                        return <td key={d} style={{ textAlign: 'center', fontWeight: 600, color: val >= 2 ? 'var(--accent2)' : val === 1 ? 'var(--accent3)' : 'var(--text2)' }}>{val || '-'}</td>;
+   856→   856→                      })}
+   857→   857→                      <td style={{ textAlign: 'center', fontWeight: 700, color: 'var(--accent)', fontFamily: 'var(--mono)' }}>{tt.totalComm}</td>
+   858→   858→                      <td style={{ background: 'rgba(0,255,157,0.03)', padding: '8px 14px' }}>
+   859→   859→                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+   860→   860→                          <span style={{ fontFamily: 'var(--mono)', fontWeight: 700, color: hrsColor, minWidth: 48 }}>{hrs.toFixed(1)}h</span>
+   861→   861→                          <div style={{ flex: 1, height: 6, background: 'var(--border)', borderRadius: 3, overflow: 'hidden' }}>
+   862→   862→                            <div style={{ width: `${pct}%`, height: '100%', background: hrsColor, borderRadius: 3, transition: 'width 0.3s' }} />
+   863→   863→                          </div>
+   864→   864→                        </div>
+   865→   865→                      </td>
+   866→   866→                      <td>{status}</td>
+   867→   867→                    </tr>
+   868→   868→                  );
+   869→   869→                })}
+   870→   870→                <tr style={{ background: 'rgba(0,212,255,0.05)', fontWeight: 700 }}>
+   871→   871→                  <td colSpan={3} style={{ color: 'var(--accent)', fontWeight: 700 }}>الإجمالي</td>
+   872→   872→                  {DAYS.map(d => {
+   873→   873→                    const dayTotal = teachers.reduce((a, t) => a + (tr[t.id]?.dayComm[d] || 0), 0);
+   874→   874→                    return <td key={d} style={{ textAlign: 'center', color: 'var(--accent)' }}>{dayTotal}</td>;
+   875→   875→                  })}
+   876→   876→                  <td style={{ textAlign: 'center', color: 'var(--accent)', fontFamily: 'var(--mono)' }}>{totalComAll}</td>
+   877→   877→                  <td style={{ fontFamily: 'var(--mono)', fontWeight: 700, color: 'var(--accent3)', padding: '8px 14px' }}>{totalHrsAll.toFixed(1)}h</td>
+   878→   878→                  <td></td>
+   879→   879→                </tr>
+   880→   880→              </tbody>
+   881→   881→            </table>
+   882→   882→          </div>
+   883→   883→        </div>
+   884→   884→      </>
+   885→   885→    );
+   886→   886→  };
+   887→   887→
+   888→   888→  // ========== MAIN APP RENDER ==========
+   889→   889→  const pages: { key: Page; label: string; adminOnly: boolean }[] = [
+   890→   890→    { key: 'teachers', label: '👨‍🏫 المعلمين', adminOnly: false },
+   891→   891→    { key: 'schedule', label: '📅 الجدول', adminOnly: false },
+   892→   892→    { key: 'distribute', label: '⚡ التوزيع', adminOnly: true },
+   893→   893→    { key: 'results', label: '📋 النتائج', adminOnly: false },
+   894→   894→    { key: 'stats', label: '📊 الإحصائيات', adminOnly: true },
+   895→   895→  ];
+   896→   896→
+   897→   897→  const visiblePages = pages.filter(p => !p.adminOnly || isAdmin);
+   898→   898→
+   899→   899→  return (
+   900→   900→    <div style={{ position: 'relative', zIndex: 1, minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
+   901→   901→      {/* Header */}
+   902→   902→      <header style={{
+   903→   903→        background: 'linear-gradient(135deg, #0d1b2e 0%, #0a1628 100%)',
+   904→   904→        borderBottom: '1px solid var(--border)',
+   905→   905→        padding: '0 32px',
+   906→   906→        display: 'flex',
+   907→   907→        alignItems: 'center',
+   908→   908→        justifyContent: 'space-between',
+   909→   909→        height: 64,
+   910→   910→        position: 'sticky',
+   911→   911→        top: 0,
+   912→   912→        zIndex: 100,
+   913→   913→        backdropFilter: 'blur(20px)'
+   914→   914→      }}>
+   915→   915→        <div style={{ display: 'flex', alignItems: 'center', gap: 12, fontFamily: 'var(--mono)', fontSize: 14, color: 'var(--accent)', letterSpacing: 2 }}>
+   916→   916→          <div style={{ width: 8, height: 8, background: 'var(--accent)', borderRadius: '50%', animation: 'pulse 2s infinite' }} />
+   917→   917→          EXAM · SUPERVISOR · ONLINE
+   918→   918→        </div>
+   919→   919→        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+   920→   920→          <span className="badge" style={{ background: `${roleColor}22`, color: roleColor }}>{roleLabel}</span>
+   921→   921→          <span style={{ fontSize: 11, display: 'flex', alignItems: 'center', gap: 4 }}>
+   922→   922→            <span style={{ width: 6, height: 6, borderRadius: '50%', background: isConnected ? 'var(--success)' : 'var(--danger)' }} />
+   923→   923→            {isConnected ? 'Live' : 'Offline'}
+   924→   924→          </span>
+   925→   925→          {isAdmin && (
+   926→   926→            <button className="btn btn-ghost" onClick={exportCSV}>📥 Export</button>
+   927→   927→          )}
+   928→   928→          {isAdmin && (
+   929→   929→            <button className="btn btn-ghost" onClick={resetAll}>🗑 Reset</button>
+   930→   930→          )}
+   931→   931→          <button className="btn btn-ghost" onClick={handleLogout}>🚪 خروج</button>
+   932→   932→        </div>
+   933→   933→      </header>
+   934→   934→
+   935→   935→      {/* Nav Tabs */}
+   936→   936→      <div style={{ display: 'flex', gap: 0, background: 'var(--surface)', borderBottom: '1px solid var(--border)', padding: '0 32px', overflowX: 'auto' }}>
+   937→   937→        {visiblePages.map(p => (
+   938→   938→          <div
+   939→   939→            key={p.key}
+   940→   940→            className={'nav-tab' + (activePage === p.key ? ' active' : '')}
+   941→   941→            onClick={() => setActivePage(p.key)}
+   942→   942→          >
+   943→   943→            {p.label}
+   944→   944→          </div>
+   945→   945→        ))}
+   946→   946→      </div>
+   947→   947→
+   948→   948→      {/* Main Content */}
+   949→   949→      <main style={{ padding: '28px 32px', maxWidth: 1400, margin: '0 auto', width: '100%', flex: 1 }}>
+   950→   950→        {loading ? (
+   951→   951→          <div style={{ textAlign: 'center', padding: 64, color: 'var(--text2)' }}>
+   952→   952→            <div style={{ width: 24, height: 24, border: '2px solid var(--border)', borderTopColor: 'var(--accent)', borderRadius: '50%', animation: 'spin 0.8s linear infinite', margin: '0 auto 12px' }} />
+   953→   953→            جاري التحميل...
+   954→   954→          </div>
+   955→   955→        ) : (
+   956→   956→          <>
+   957→   957→            {activePage === 'teachers' && renderTeachersPage()}
+   958→   958→            {activePage === 'schedule' && renderSchedulePage()}
+   959→   959→            {activePage === 'distribute' && isAdmin && renderDistributePage()}
+   960→   960→            {activePage === 'results' && renderResultsPage()}
+   961→   961→            {activePage === 'stats' && isAdmin && renderStatsPage()}
+   962→   962→          </>
+   963→   963→        )}
+   964→   964→      </main>
+   965→   965→
+   966→   966→      {/* Toast */}
+   967→   967→      <div id="app-toast" className="toast" />
+   968→   968→
+   969→   969→      {/* Inline styles for components not in globals */}
+   970→   970→      <style jsx>{`
+   971→   971→        @keyframes pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.4;transform:scale(1.4)} }
+   972→   972→        @keyframes spin { to { transform: rotate(360deg); } }
+   973→   973→        .nav-tab { padding: 14px 24px; font-size: 13px; font-weight: 500; color: var(--text2); cursor: pointer; border-bottom: 2px solid transparent; transition: all 0.2s; white-space: nowrap; user-select: none; }
+   974→   974→        .nav-tab:hover { color: var(--text); }
+   975→   975→        .nav-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+   976→   976→        .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 24px; margin-bottom: 20px; }
+   977→   977→        .card-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; flex-wrap: wrap; gap: 12px; }
+   978→   978→        .card-title { font-size: 15px; font-weight: 600; color: var(--text); display: flex; align-items: center; gap: 10px; }
+   979→   979→        .card-title::before { content:''; width: 3px; height: 18px; background: var(--accent); border-radius: 2px; }
+   980→   980→        .btn { display: inline-flex; align-items: center; gap: 8px; padding: 9px 18px; border-radius: 8px; font-size: 13px; font-weight: 500; cursor: pointer; border: none; transition: all 0.2s; font-family: var(--sans); }
+   981→   981→        .btn-primary { background: var(--accent); color: #000; }
+   982→   982→        .btn-primary:hover { background: #00b8d9; transform:translateY(-1px); }
+   983→   983→        .btn-demo { background: #8a2be2; color: #fff; border: 1px solid rgba(255,255,255,0.1); }
+   984→   984→        .btn-demo:hover { background: #9932cc; transform:translateY(-1px); }
+   985→   985→        .btn-ghost { background: transparent; color: var(--text2); border: 1px solid var(--border); }
+   986→   986→        .btn-ghost:hover { color:var(--text); border-color: var(--accent); }
+   987→   987→        .btn-orange { background: var(--accent2); color: #fff; padding: 12px 32px; font-size: 15px; font-weight: 600; }
+   988→   988→        .btn-orange:hover { background: #e55a2b; transform:translateY(-2px); box-shadow: 0 8px 24px rgba(255,107,53,0.3); }
+   989→   989→        .table-wrap { overflow-x: auto; }
+   990→   990→        table { width: 100%; border-collapse: collapse; font-size: 13px; }
+   991→   991→        thead th { background: var(--surface2); padding: 10px 14px; text-align: left; font-weight: 600; color: var(--text2); font-size: 12px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+   992→   992→        tbody tr { border-bottom: 1px solid rgba(30,58,95,0.5); transition: background 0.15s; }
+   993→   993→        tbody tr:hover { background: rgba(0,212,255,0.03); }
+   994→   994→        tbody td { padding: 10px 14px; color: var(--text); vertical-align: middle; }
+   995→   995→        .form-group { margin-bottom: 16px; }
+   996→   996→        .form-label { display: block; font-size: 12px; font-weight: 500; color: var(--text2); margin-bottom: 6px; }
+   997→   997→        .form-input, .form-select { width: 100%; padding: 9px 13px; background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; color: var(--text); font-size: 13px; font-family: var(--sans); }
+   998→   998→        .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+   999→   999→        .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; }
+  1000→  1000→        .grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+  1001→  1001→        .stat-card { background: var(--surface2); border: 1px solid var(--border); border-radius: 10px; padding: 20px; text-align: center; }
+  1002→  1002→        .stat-number { font-family: var(--mono); font-size: 28px; font-weight: 600; color: var(--accent); display: block; }
+  1003→  1003→        .stat-label { font-size: 12px; color: var(--text2); margin-top: 4px; }
+  1004→  1004→        .badge { display: inline-block; padding: 3px 10px; border-radius: 20px; font-size: 11px; font-weight: 600; }
+  1005→  1005→        .badge-blue { background:rgba(0,212,255,0.15); color:var(--accent); }
+  1006→  1006→        .badge-orange { background:rgba(255,107,53,0.15); color:var(--accent2); }
+  1007→  1007→        .badge-green { background:rgba(0,255,157,0.15); color:var(--accent3); }
+  1008→  1008→        .badge-red { background:rgba(255,68,68,0.15); color:var(--danger); }
+  1009→  1009→        .action-btn { background: none; border: none; cursor: pointer; font-size: 14px; padding: 4px 8px; border-radius: 4px; }
+  1010→  1010→        .del-btn { color: var(--danger); }
+  1011→  1011→        .edit-btn { color: var(--accent); margin-right: 6px; }
+  1012→  1012→        .schedule-grid { display: grid; grid-template-columns: 160px repeat(6, 1fr); gap: 4px; font-size: 12px; }
+  1013→  1013→        .sg-header { background: var(--surface2); padding: 10px 8px; text-align: center; font-weight: 600; color: var(--accent); border-radius: 6px; }
+  1014→  1014→        .sg-grade { background: var(--surface2); padding: 10px 12px; font-weight: 500; border-radius: 6px; display: flex; align-items: center; }
+  1015→  1015→        .sg-cell { background: var(--surface2); border-radius: 6px; padding: 6px; display: flex; flex-direction: column; gap: 4px; }
+  1016→  1016→        .sg-cell input, .sg-cell select { width: 100%; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; color: var(--text); font-size: 11px; padding: 4px 6px; font-family: var(--sans); }
+  1017→  1017→        .result-day { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; margin-bottom: 16px; overflow: hidden; }
+  1018→  1018→        .result-day-header { background: var(--surface2); padding: 14px 20px; display: flex; align-items: center; justify-content: space-between; cursor: pointer; }
+  1019→  1019→        .result-day-title { font-weight: 600; font-size: 14px; color: var(--accent); display: flex; align-items: center; gap: 10px; }
+  1020→  1020→        .result-day-body { padding: 16px 20px; }
+  1021→  1021→        .result-session { margin-bottom: 16px; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  1022→  1022→        .result-session-header { background: rgba(0,212,255,0.05); padding: 10px 16px; display: flex; gap: 20px; align-items: center; font-size: 12px; }
+  1023→  1023→        .rs-grade { font-weight: 600; color: var(--text); }
+  1024→  1024→        .rs-time { color: var(--accent); font-family: var(--mono); }
+  1025→  1025→        .rs-subject { color: var(--accent2); }
+  1026→  1026→        .result-com { display: grid; grid-template-columns: 60px 1fr 1fr 100px; gap: 0; font-size: 12px; }
+  1027→  1027→        .rc-cell { padding: 8px 12px; border-bottom: 1px solid rgba(30,58,95,0.4); display: flex; align-items: center; }
+  1028→  1028→        .rc-num { color: var(--text2); font-family: var(--mono); justify-content: center; }
+  1029→  1029→        .toast { position: fixed; bottom: 28px; left: 50%; transform: translateX(-50%) translateY(100px); background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 14px 24px; font-size: 14px; z-index: 999; transition: transform 0.3s ease; min-width: 300px; text-align: center; }
+  1030→  1030→        .toast.show { transform: translateX(-50%) translateY(0); }
+  1031→  1031→        .toast.success { border-color: var(--success); color: var(--success); }
+  1032→  1032→        .toast.error { border-color: var(--danger); color: var(--danger); }
+  1033→  1033→        @media (max-width: 768px) {
+  1034→  1034→          header { padding: 0 16px; }
+  1035→  1035→          main { padding: 16px; }
+  1036→  1036→          .grid-3, .grid-4 { grid-template-columns: 1fr; }
+  1037→  1037→          .grid-2 { grid-template-columns: 1fr; }
+  1038→  1038→          .schedule-grid { grid-template-columns: 120px repeat(6, minmax(80px, 1fr)); }
+  1039→  1039→          .result-com { grid-template-columns: 50px 1fr 1fr 80px; font-size: 11px; }
+  1040→  1040→        }
+  1041→  1041→      `}</style>
+  1042→  1042→    </div>
+  1043→  1043→  );
+  1044→  1044→}
+  1045→  1045→
+  1046→  1046→// Need React import for Fragment
+  1047→  1047→import React from 'react';

@@ -1,0 +1,502 @@
+     1→     1→     1→'use client';
+     2→     2→     2→
+     3→     3→     3→import { useEffect, useState, useCallback, useRef } from 'react';
+     4→     4→     4→import { createClient, RealtimeChannel } from '@supabase/supabase-js';
+     5→     5→     5→
+     6→     6→     6→// ========== CONSTANTS ==========
+     7→     7→     7→const DAYS = ['Saturday','Sunday','Monday','Tuesday','Wednesday','Thursday'];
+     8→     8→     8→const GRADES = [
+     9→     9→     9→  'Grade 3 Primary','Grade 4 Primary','Grade 5 Primary','Grade 6 Primary',
+    10→    10→    10→  'Grade 1 Prep','Grade 2 Prep','Grade 1 Secondary','Grade 2 Secondary'
+    11→    11→    11→];
+    12→    12→    12→const SUBJECTS = ['Math','Science','Arabic','English','French','Social Studies',
+    13→    13→    13→                  'Arts','Computer','Library','Religion','Psychology','Admin','Other'];
+    14→    14→    14→const DEFAULT_TIMES: Record<string,string> = {
+    15→    15→    15→  'Grade 3 Primary':'9:00-10:30','Grade 4 Primary':'9:00-10:30',
+    16→    16→    16→  'Grade 5 Primary':'9:00-10:30','Grade 6 Primary':'9:00-10:30',
+    17→    17→    17→  'Grade 1 Prep':'9:00-11:00','Grade 2 Prep':'9:00-11:00',
+    18→    18→    18→  'Grade 1 Secondary':'12:00-14:00','Grade 2 Secondary':'8:30-10:30'
+    19→    19→    19→};
+    20→    20→    20→
+    21→    21→    21→// ========== TYPES ==========
+    22→    22→    22→interface Teacher { id: string; name: string; subject: string; notes: string; }
+    23→    23→    23→interface ScheduleCell { id?: string; grade: string; day: string; committees: number; subject: string; time: string; }
+    24→    24→    24→interface TrackingEntry { totalComm: number; totalHours: number; dayComm: Record<string,number>; assignedSlots: {day:string;start:number;end:number}[]; }
+    25→    25→    25→interface CommitteeResult { serial: number; t1: {id:string|null;name:string}; t2: {id:string|null;name:string}; }
+    26→    26→    26→interface SessionResult { grade: string; time: string; subject: string; committees: CommitteeResult[]; }
+    27→    27→    27→
+    28→    28→    28→type View = 'login' | 'user' | 'admin';
+    29→    29→    29→type Page = 'teachers' | 'schedule' | 'distribute' | 'results' | 'stats';
+    30→    30→    30→
+    31→    31→    31→// ========== HELPERS ==========
+    32→    32→    32→function parseTimeRange(tStr: string) {
+    33→    33→    33→  if (!tStr || !tStr.includes('-')) return { start: 540, end: 630, duration: 1.5 };
+    34→    34→    34→  try {
+    35→    35→    35→    let clean = tStr.replace(/\s+/g, '').replace(/—/g, '-').replace(/–/g, '-');
+    36→    36→    36→    const parts = clean.split('-');
+    37→    37→    37→    const toMinutes = (s: string) => { const p = s.split(':'); return (parseInt(p[0])||0)*60 + (parseInt(p[1])||0); };
+    38→    38→    38→    let start = toMinutes(parts[0]);
+    39→    39→    39→    let end = toMinutes(parts[1]);
+    40→    40→    40→    if (end <= start) end += 720;
+    41→    41→    41→    return { start, end, duration: (end - start) / 60 };
+    42→    42→    42→  } catch { return { start: 540, end: 630, duration: 1.5 }; }
+    43→    43→    43→}
+    44→    44→    44→
+    45→    45→    45→function getStage(grade: string) {
+    46→    46→    46→  const g = grade.toLowerCase();
+    47→    47→    47→  if (g.includes('primary')) return 'primary';
+    48→    48→    48→  if (g.includes('prep')) return 'prep';
+    49→    49→    49→  if (g.includes('secondary') || g.includes('sec')) return 'sec';
+    50→    50→    50→  return 'any';
+    51→    51→    51→}
+    52→    52→    52→
+    53→    53→    53→// ========== TOAST ==========
+    54→    54→    54→let toastTimer: ReturnType<typeof setTimeout> | null = null;
+    55→    55→    55→function showToast(msg: string, type: 'success' | 'error' | 'info' = 'info') {
+    56→    56→    56→  const el = document.getElementById('app-toast');
+    57→    57→    57→  if (!el) return;
+    58→    58→    58→  el.textContent = msg;
+    59→    59→    59→  el.className = 'toast show ' + type;
+    60→    60→    60→  if (toastTimer) clearTimeout(toastTimer);
+    61→    61→    61→  toastTimer = setTimeout(() => { el.className = 'toast'; }, 3000);
+    62→    62→    62→}
+    63→    63→    63→
+    64→    64→    64→// ========== MAIN COMPONENT ==========
+    65→    65→    65→export default function ExamSystem() {
+    66→    66→    66→  // Auth state
+    67→    67→    67→  const [view, setView] = useState<View>('login');
+    68→    68→    68→  const [password, setPassword] = useState('');
+    69→    69→    69→  const [loginError, setLoginError] = useState('');
+    70→    70→    70→  const [isConnected, setIsConnected] = useState(true); // Assume connected until proven otherwise
+    71→    71→    71→
+    72→    72→    72→  // Data state
+    73→    73→    73→  const [teachers, setTeachers] = useState<Teacher[]>([]);
+    74→    74→    74→  const [schedule, setSchedule] = useState<ScheduleCell[]>([]);
+    75→    75→    75→  const [results, setResults] = useState<{ assignments: Record<string, SessionResult[]>; tracking: Record<string, TrackingEntry> } | null>(null);
+    76→    76→    76→
+    77→    77→    77→  // UI state
+    78→    78→    78→  const [activePage, setActivePage] = useState<Page>('teachers');
+    79→    79→    79→  const [showAddTeacher, setShowAddTeacher] = useState(false);
+    80→    80→    80→  const [editTeacherId, setEditTeacherId] = useState<string | null>(null);
+    81→    81→    81→  const [formName, setFormName] = useState('');
+    82→    82→    82→  const [formSubject, setFormSubject] = useState('');
+    83→    83→    83→  const [formNotes, setFormNotes] = useState('');
+    84→    84→    84→  const [loading, setLoading] = useState(true);
+    85→    85→    85→
+    86→    86→    86→  // Schedule edit buffer (local edits before saving)
+    87→    87→    87→  const [scheduleBuffer, setScheduleBuffer] = useState<Record<string, ScheduleCell>>({});
+    88→    88→    88→
+    89→    89→    89→  // Ref for Supabase realtime channels
+    90→    90→    90→  const channelsRef = useRef<RealtimeChannel[]>([]);
+    91→    91→    91→
+    92→    92→    92→  // ========== LOAD DATA ==========
+    93→    93→    93→  const loadTeachers = useCallback(async () => {
+    94→    94→    94→    try {
+    95→    95→    95→      const res = await fetch('/api/teachers');
+    96→    96→    96→      if (res.ok) setTeachers(await res.json());
+    97→    97→    97→    } catch { /* silent */ }
+    98→    98→    98→  }, []);
+    99→    99→    99→
+   100→   100→   100→  const loadSchedule = useCallback(async () => {
+   101→   101→   101→    try {
+   102→   102→   102→      const res = await fetch('/api/schedule');
+   103→   103→   103→      if (res.ok) {
+   104→   104→   104→        const data: ScheduleCell[] = await res.json();
+   105→   105→   105→        setSchedule(data);
+   106→   106→   106→        // Build buffer
+   107→   107→   107→        const buf: Record<string, ScheduleCell> = {};
+   108→   108→   108→        data.forEach(c => { buf[`${c.grade}__${c.day}`] = c; });
+   109→   109→   109→        setScheduleBuffer(buf);
+   110→   110→   110→      }
+   111→   111→   111→    } catch { /* silent */ }
+   112→   112→   112→  }, []);
+   113→   113→   113→
+   114→   114→   114→  const loadResults = useCallback(async () => {
+   115→   115→   115→    try {
+   116→   116→   116→      const res = await fetch('/api/results');
+   117→   117→   117→      if (res.ok) {
+   118→   118→   118→        const data = await res.json();
+   119→   119→   119→        if (data && data.data) setResults(data.data);
+   120→   120→   120→      }
+   121→   121→   121→    } catch { /* silent */ }
+   122→   122→   122→  }, []);
+   123→   123→   123→
+   124→   124→   124→  const loadAll = useCallback(() => {
+   125→   125→   125→    setLoading(true);
+   126→   126→   126→    Promise.all([loadTeachers(), loadSchedule(), loadResults()])
+   127→   127→   127→      .finally(() => setLoading(false));
+   128→   128→   128→  }, [loadTeachers, loadSchedule, loadResults]);
+   129→   129→   129→
+   130→   130→   130→  // ========== SUPABASE REALTIME ==========
+   131→   131→   131→  useEffect(() => {
+   132→   132→   132→    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+   133→   133→   133→    const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+   134→   134→   134→    if (!supabaseUrl || !supabaseKey) return;
+   135→   135→   135→
+   136→   136→   136→    const sb = createClient(supabaseUrl, supabaseKey);
+   137→   137→   137→
+   138→   138→   138→    // Subscribe to teachers changes
+   139→   139→   139→    const teachersCh = sb.channel('teachers-changes')
+   140→   140→   140→      .on('postgres_changes', { event: '*', schema: 'public', table: 'teachers' }, () => {
+   141→   141→   141→        loadTeachers();
+   142→   142→   142→      })
+   143→   143→   143→      .subscribe((status) => {
+   144→   144→   144→        setIsConnected(status === 'SUBSCRIBED');
+   145→   145→   145→      });
+   146→   146→   146→
+   147→   147→   147→    // Subscribe to schedule changes
+   148→   148→   148→    const scheduleCh = sb.channel('schedule-changes')
+   149→   149→   149→      .on('postgres_changes', { event: '*', schema: 'public', table: 'schedule_cells' }, () => {
+   150→   150→   150→        loadSchedule();
+   151→   151→   151→      })
+   152→   152→   152→      .subscribe();
+   153→   153→   153→
+   154→   154→   154→    // Subscribe to results changes
+   155→   155→   155→    const resultsCh = sb.channel('results-changes')
+   156→   156→   156→      .on('postgres_changes', { event: '*', schema: 'public', table: 'distribution_results' }, () => {
+   157→   157→   157→        loadResults();
+   158→   158→   158→      })
+   159→   159→   159→      .subscribe();
+   160→   160→   160→
+   161→   161→   161→    channelsRef.current = [teachersCh, scheduleCh, resultsCh];
+   162→   162→   162→
+   163→   163→   163→    return () => {
+   164→   164→   164→      teachersCh.unsubscribe();
+   165→   165→   165→      scheduleCh.unsubscribe();
+   166→   166→   166→      resultsCh.unsubscribe();
+   167→   167→   167→    };
+   168→   168→   168→  }, [loadTeachers, loadSchedule, loadResults]);
+   169→   169→   169→
+   170→   170→   170→  // ========== AUTH ==========
+   171→   171→   171→  const handleLogin = async (role: 'user' | 'admin') => {
+   172→   172→   172→    if (role === 'user') {
+   173→   173→   173→      setView('user');
+   174→   174→   174→      loadAll();
+   175→   175→   175→      return;
+   176→   176→   176→    }
+   177→   177→   177→    // Admin login
+   178→   178→   178→    if (!password.trim()) { setLoginError('ادخل كلمة السر'); return; }
+   179→   179→   179→    try {
+   180→   180→   180→      const res = await fetch('/api/auth', {
+   181→   181→   181→        method: 'POST',
+   182→   182→   182→        headers: { 'Content-Type': 'application/json' },
+   183→   183→   183→        body: JSON.stringify({ password })
+   184→   184→   184→      });
+   185→   185→   185→      const data = await res.json();
+   186→   186→   186→      if (data.success) {
+   187→   187→   187→        setView('admin');
+   188→   188→   188→        loadAll();
+   189→   189→   189→      } else {
+   190→   190→   190→        setLoginError(data.message || 'كلمة السر غلط');
+   191→   191→   191→      }
+   192→   192→   192→    } catch { setLoginError('خطأ في الاتصال'); }
+   193→   193→   193→  };
+   194→   194→   194→
+   195→   195→   195→  const handleLogout = () => {
+   196→   196→   196→    setView('login');
+   197→   197→   197→    setPassword('');
+   198→   198→   198→    setLoginError('');
+   199→   199→   199→    setTeachers([]);
+   200→   200→   200→    setSchedule([]);
+   201→   201→   201→    setResults(null);
+   202→   202→   202→  };
+   203→   203→   203→
+   204→   204→   204→  // ========== TEACHER ACTIONS ==========
+   205→   205→   205→  const saveTeacher = async () => {
+   206→   206→   206→    if (!formName.trim() || !formSubject) { showToast('Fill all required fields', 'error'); return; }
+   207→   207→   207→    try {
+   208→   208→   208→      if (editTeacherId) {
+   209→   209→   209→        await fetch('/api/teachers', {
+   210→   210→   210→          method: 'PUT',
+   211→   211→   211→          headers: { 'Content-Type': 'application/json' },
+   212→   212→   212→          body: JSON.stringify({ id: editTeacherId, name: formName.trim(), subject: formSubject, notes: formNotes.trim() })
+   213→   213→   213→        });
+   214→   214→   214→        showToast('تم تعديل المعلم', 'success');
+   215→   215→   215→      } else {
+   216→   216→   216→        await fetch('/api/teachers', {
+   217→   217→   217→          method: 'POST',
+   218→   218→   218→          headers: { 'Content-Type': 'application/json' },
+   219→   219→   219→          body: JSON.stringify({ name: formName.trim(), subject: formSubject, notes: formNotes.trim() })
+   220→   220→   220→        });
+   221→   221→   221→        showToast('تم إضافة المعلم', 'success');
+   222→   222→   222→      }
+   223→   223→   223→      cancelEdit();
+   224→   224→   224→      loadTeachers();
+   225→   225→   225→    } catch { showToast('Error saving teacher', 'error'); }
+   226→   226→   226→  };
+   227→   227→   227→
+   228→   228→   228→  const deleteTeacher = async (id: string) => {
+   229→   229→   229→    if (!confirm('Delete this teacher?')) return;
+   230→   230→   230→    try {
+   231→   231→   231→      await fetch(`/api/teachers?id=${id}`, { method: 'DELETE' });
+   232→   232→   232→      loadTeachers();
+   233→   233→   233→      showToast('تم حذف المعلم', 'success');
+   234→   234→   234→    } catch { showToast('Error deleting', 'error'); }
+   235→   235→   235→  };
+   236→   236→   236→
+   237→   237→   237→  const startEdit = (t: Teacher) => {
+   238→   238→   238→    setEditTeacherId(t.id);
+   239→   239→   239→    setFormName(t.name);
+   240→   240→   240→    setFormSubject(t.subject);
+   241→   241→   241→    setFormNotes(t.notes);
+   242→   242→   242→    setShowAddTeacher(true);
+   243→   243→   243→  };
+   244→   244→   244→
+   245→   245→   245→  const cancelEdit = () => {
+   246→   246→   246→    setEditTeacherId(null);
+   247→   247→   247→    setFormName('');
+   248→   248→   248→    setFormSubject('');
+   249→   249→   249→    setFormNotes('');
+   250→   250→   250→    setShowAddTeacher(false);
+   251→   251→   251→  };
+   252→   252→   252→
+   253→   253→   253→  const generateDemoTeachers = async () => {
+   254→   254→   254→    const demoTeachers: { name: string; subject: string; notes: string }[] = [];
+   255→   255→   255→    let count = 1;
+   256→   256→   256→    for (let i = 1; i <= 15; i++) {
+   257→   257→   257→      demoTeachers.push({ name: `Math Specialist Expert T${count++}`, subject: 'Math', notes: i <= 9 ? 'prep, sec' : '' });
+   258→   258→   258→    }
+   259→   259→   259→    for (let i = 1; i <= 45; i++) demoTeachers.push({ name: `English Senior Faculty T${count++}`, subject: 'English', notes: '' });
+   260→   260→   260→    for (let i = 1; i <= 40; i++) demoTeachers.push({ name: `Arabic Lang Professor T${count++}`, subject: 'Arabic', notes: i <= 16 ? 'prep, sec' : '' });
+   261→   261→   261→    for (let i = 1; i <= 9; i++) demoTeachers.push({ name: `French Educator Staff T${count++}`, subject: 'French', notes: '' });
+   262→   262→   262→    for (let i = 1; i <= 8; i++) demoTeachers.push({ name: `Social Studies Instructor T${count++}`, subject: 'Social Studies', notes: i === 1 ? 'prep, sec' : '' });
+   263→   263→   263→    for (let i = 1; i <= 9; i++) demoTeachers.push({ name: `Pure Science Research T${count++}`, subject: 'Science', notes: '' });
+   264→   264→   264→    const otherSubs = ['Arts', 'Computer', 'Library', 'Religion', 'Psychology', 'Admin', 'Other'];
+   265→   265→   265→    for (let i = 1; i <= 74; i++) {
+   266→   266→   266→      demoTeachers.push({ name: `${otherSubs[i % otherSubs.length]} Resource Officer T${count++}`, subject: otherSubs[i % otherSubs.length], notes: '' });
+   267→   267→   267→    }
+   268→   268→   268→    try {
+   269→   269→   269→      await fetch('/api/distribute', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ teachers: demoTeachers }) });
+   270→   270→   270→      loadTeachers();
+   271→   271→   271→      showToast('Added 200 teachers!', 'success');
+   272→   272→   272→    } catch { showToast('Error', 'error'); }
+   273→   273→   273→  };
+   274→   274→   274→
+   275→   275→   275→  const importCSV = () => {
+   276→   276→   276→    const input = document.createElement('input');
+   277→   277→   277→    input.type = 'file'; input.accept = '.csv';
+   278→   278→   278→    input.onchange = async (e) => {
+   279→   279→   279→      const file = (e.target as HTMLInputElement).files?.[0];
+   280→   280→   280→      if (!file) return;
+   281→   281→   281→      const text = await file.text();
+   282→   282→   282→      const lines = text.split('\n');
+   283→   283→   283→      const imported: { name: string; subject: string; notes: string }[] = [];
+   284→   284→   284→      lines.forEach(line => {
+   285→   285→   285→        const parts = line.split(',').map(p => p.trim());
+   286→   286→   286→        if (parts.length >= 2 && parts[0]) imported.push({ name: parts[0], subject: parts[1], notes: parts[2] || '' });
+   287→   287→   287→      });
+   288→   288→   288→      if (imported.length === 0) { showToast('No valid data in CSV', 'error'); return; }
+   289→   289→   289→      try {
+   290→   290→   290→        await fetch('/api/distribute', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ teachers: imported }) });
+   291→   291→   291→        loadTeachers();
+   292→   292→   292→        showToast(`Imported ${imported.length} teachers`, 'success');
+   293→   293→   293→      } catch { showToast('Import error', 'error'); }
+   294→   294→   294→    };
+   295→   295→   295→    input.click();
+   296→   296→   296→  };
+   297→   297→   297→
+   298→   298→   298→  // ========== SCHEDULE ACTIONS ==========
+   299→   299→   299→  const updateCell = (grade: string, day: string, field: 'committees' | 'subject' | 'time', value: string | number) => {
+   300→   300→   300→    const key = `${grade}__${day}`;
+   301→   301→   301→    setScheduleBuffer(prev => ({
+   302→   302→   302→      ...prev,
+   303→   303→   303→      [key]: { ...prev[key], grade, day, [field]: value, id: prev[key]?.id }
+   304→   304→   304→    }));
+   305→   305→   305→  };
+   306→   306→   306→
+   307→   307→   307→  const saveSchedule = async () => {
+   308→   308→   308→    const cells = Object.values(scheduleBuffer);
+   309→   309→   309→    try {
+   310→   310→   310→      await fetch('/api/schedule', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(cells) });
+   311→   311→   311→      showToast('Schedule saved!', 'success');
+   312→   312→   312→      loadSchedule();
+   313→   313→   313→    } catch { showToast('Error saving schedule', 'error'); }
+   314→   314→   314→  };
+   315→   315→   315→
+   316→   316→   316→  const resetSchedule = async () => {
+   317→   317→   317→    if (!confirm('Reset schedule?')) return;
+   318→   318→   318→    setScheduleBuffer({});
+   319→   319→   319→    try {
+   320→   320→   320→      await fetch('/api/schedule', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify([]) });
+   321→   321→   321→      loadSchedule();
+   322→   322→   322→      showToast('Schedule reset', 'info');
+   323→   323→   323→    } catch { /* silent */ }
+   324→   324→   324→  };
+   325→   325→   325→
+   326→   326→   326→  // ========== DISTRIBUTION ENGINE ==========
+   327→   327→   327→  const runDistribution = () => {
+   328→   328→   328→    if (teachers.length === 0) { showToast('No teachers in registry!', 'error'); return; }
+   329→   329→   329→
+   330→   330→   330→    // Get rule checkboxes
+   331→   331→   331→    const ruleSubject = (document.getElementById('rule-subject') as HTMLInputElement)?.checked ?? true;
+   332→   332→   332→    const ruleDayLimit = (document.getElementById('rule-daylimit') as HTMLInputElement)?.checked ?? true;
+   333→   333→   333→    const ruleNotes = (document.getElementById('rule-notes') as HTMLInputElement)?.checked ?? true;
+   334→   334→   334→
+   335→   335→   335→    const tracking: Record<string, TrackingEntry> = {};
+   336→   336→   336→    teachers.forEach(t => {
+   337→   337→   337→      tracking[t.id] = { totalComm: 0, totalHours: 0, dayComm: {} as Record<string,number>, assignedSlots: [] };
+   338→   338→   338→      DAYS.forEach(d => { tracking[t.id].dayComm[d] = 0; });
+   339→   339→   339→    });
+   340→   340→   340→
+   341→   341→   341→    // Build all slots
+   342→   342→   342→    const allSlots: { day: string; grade: string; stage: string; subject: string; time: string; timeInfo: ReturnType<typeof parseTimeRange>; comId: number }[] = [];
+   343→   343→   343→    DAYS.forEach(day => {
+   344→   344→   344→      GRADES.forEach(grade => {
+   345→   345→   345→        const cell = scheduleBuffer[`${grade}__${day}`];
+   346→   346→   346→        if (cell && cell.committees > 0) {
+   347→   347→   347→          const timeInfo = parseTimeRange(cell.time || DEFAULT_TIMES[grade] || '9:00-10:30');
+   348→   348→   348→          for (let c = 1; c <= cell.committees; c++) {
+   349→   349→   349→            allSlots.push({ day, grade, stage: getStage(grade), subject: cell.subject || '', time: cell.time || DEFAULT_TIMES[grade] || '9:00-10:30', timeInfo, comId: c });
+   350→   350→   350→          }
+   351→   351→   351→        }
+   352→   352→   352→      });
+   353→   353→   353→    });
+   354→   354→   354→
+   355→   355→   355→    allSlots.sort((a, b) => b.timeInfo.duration - a.timeInfo.duration);
+   356→   356→   356→
+   357→   357→   357→    // Build final assignments
+   358→   358→   358→    const finalAssignments: Record<string, SessionResult[]> = {};
+   359→   359→   359→    DAYS.forEach(d => { finalAssignments[d] = []; });
+   360→   360→   360→    DAYS.forEach(day => {
+   361→   361→   361→      GRADES.forEach(grade => {
+   362→   362→   362→        const cell = scheduleBuffer[`${grade}__${day}`];
+   363→   363→   363→        if (cell && cell.committees > 0) {
+   364→   364→   364→          const existing = finalAssignments[day].find(s => s.grade === grade && s.time === (cell.time || DEFAULT_TIMES[grade]));
+   365→   365→   365→          if (!existing) {
+   366→   366→   366→            finalAssignments[day].push({ grade, time: cell.time || DEFAULT_TIMES[grade] || '', subject: cell.subject || '', committees: [] });
+   367→   367→   367→          }
+   368→   368→   368→        }
+   369→   369→   369→      });
+   370→   370→   370→    });
+   371→   371→   371→
+   372→   372→   372→    const queryTeacher = (blockedId: string | null) => {
+   373→   373→   373→      let pool: { teacher: Teacher; matchScore: number; totalComm: number; totalHours: number }[] = [];
+   374→   374→   374→      const tryPool = (relaxDayLimit: boolean) => {
+   375→   375→   375→        pool = [];
+   376→   376→   376→        teachers.forEach(t => {
+   377→   377→   377→          if (blockedId && t.id === blockedId) return;
+   378→   378→   378→          const tr = tracking[t.id];
+   379→   379→   379→          if (ruleSubject && t.subject && allSlots.length > 0) { /* will check per slot */ }
+   380→   380→   380→          return;
+   381→   381→   381→        });
+   382→   382→   382→        return pool;
+   383→   383→   383→      };
+   384→   384→   384→
+   385→   385→   385→      return (blockedId: string | null, slot: typeof allSlots[0]) => {
+   386→   386→   386→        let pool: { teacher: Teacher; matchScore: number; totalComm: number; totalHours: number }[] = [];
+   387→   387→   387→
+   388→   388→   388→        const search = (relaxDay: boolean) => {
+   389→   389→   389→          pool = [];
+   390→   390→   390→          teachers.forEach(t => {
+   391→   391→   391→            if (blockedId && t.id === blockedId) return;
+   392→   392→   392→            const tr = tracking[t.id];
+   393→   393→   393→            if (ruleSubject && slot.subject && t.subject === slot.subject) return;
+   394→   394→   394→            let hasOverlap = tr.assignedSlots.some(s => s.day === slot.day && !(slot.timeInfo.end <= s.start || slot.timeInfo.start >= s.end));
+   395→   395→   395→            if (hasOverlap) return;
+   396→   396→   396→            if (!relaxDay && ruleDayLimit && tr.dayComm[slot.day] >= 1) return;
+   397→   397→   397→            let todayHours = 0;
+   398→   398→   398→            const seen = new Set<string>();
+   399→   399→   399→            tr.assignedSlots.filter(s => s.day === slot.day).forEach(s => {
+   400→   400→   400→              const k = s.start + '_' + s.end;
+   401→   401→   401→              if (!seen.has(k)) { seen.add(k); todayHours += (s.end - s.start) / 60; }
+   402→   402→   402→            });
+   403→   403→   403→            if (todayHours + slot.timeInfo.duration > 5) return;
+   404→   404→   404→            let matchScore = 0;
+   405→   405→   405→            if (ruleNotes && t.notes && slot.stage !== 'any' && t.notes.toLowerCase().includes(slot.stage)) matchScore = 1;
+   406→   406→   406→            pool.push({ teacher: t, matchScore, totalComm: tr.totalComm, totalHours: tr.totalHours });
+   407→   407→   407→          });
+   408→   408→   408→        };
+   409→   409→   409→
+   410→   410→   410→        search(false);
+   411→   411→   411→        if (pool.length === 0) search(true); // relax day limit
+   412→   412→   412→        if (pool.length === 0) return null;
+   413→   413→   413→
+   414→   414→   414→        pool.sort((a, b) => {
+   415→   415→   415→          if (a.totalComm !== b.totalComm) return a.totalComm - b.totalComm;
+   416→   416→   416→          if (Math.abs(a.totalHours - b.totalHours) > 0.001) return a.totalHours - b.totalHours;
+   417→   417→   417→          if (b.matchScore !== a.matchScore) return b.matchScore - a.matchScore;
+   418→   418→   418→          return a.teacher.id.localeCompare(b.teacher.id);
+   419→   419→   419→        });
+   420→   420→   420→        return pool[0].teacher;
+   421→   421→   421→      };
+   422→   422→   422→    };
+   423→   423→   423→
+   424→   424→   424→    // Re-define queryTeacher properly
+   425→   425→   425→    const findTeacher = (blockedId: string | null, slot: typeof allSlots[0], relaxDay: boolean = false): Teacher | null => {
+   426→   426→   426→      let pool: { teacher: Teacher; matchScore: number; totalComm: number; totalHours: number }[] = [];
+   427→   427→   427→      teachers.forEach(t => {
+   428→   428→   428→        if (blockedId && t.id === blockedId) return;
+   429→   429→   429→        const tr = tracking[t.id];
+   430→   430→   430→        if (ruleSubject && slot.subject && t.subject === slot.subject) return;
+   431→   431→   431→        const hasOverlap = tr.assignedSlots.some(s => s.day === slot.day && !(slot.timeInfo.end <= s.start || slot.timeInfo.start >= s.end));
+   432→   432→   432→        if (hasOverlap) return;
+   433→   433→   433→        if (!relaxDay && ruleDayLimit && tr.dayComm[slot.day] >= 1) return;
+   434→   434→   434→        let todayHours = 0;
+   435→   435→   435→        const seen = new Set<string>();
+   436→   436→   436→        tr.assignedSlots.filter(s => s.day === slot.day).forEach(s => {
+   437→   437→   437→          const k = s.start + '_' + s.end;
+   438→   438→   438→          if (!seen.has(k)) { seen.add(k); todayHours += (s.end - s.start) / 60; }
+   439→   439→   439→        });
+   440→   440→   440→        if (todayHours + slot.timeInfo.duration > 5) return;
+   441→   441→   441→        let matchScore = 0;
+   442→   442→   442→        if (ruleNotes && t.notes && slot.stage !== 'any' && t.notes.toLowerCase().includes(slot.stage)) matchScore = 1;
+   443→   443→   443→        pool.push({ teacher: t, matchScore, totalComm: tr.totalComm, totalHours: tr.totalHours });
+   444→   444→   444→      });
+   445→   445→   445→      if (pool.length === 0) return null;
+   446→   446→   446→      pool.sort((a, b) => {
+   447→   447→   447→        if (a.totalComm !== b.totalComm) return a.totalComm - b.totalComm;
+   448→   448→   448→        if (Math.abs(a.totalHours - b.totalHours) > 0.001) return a.totalHours - b.totalHours;
+   449→   449→   449→        if (b.matchScore !== a.matchScore) return b.matchScore - a.matchScore;
+   450→   450→   450→        return a.teacher.id.localeCompare(b.teacher.id);
+   451→   451→   451→      });
+   452→   452→   452→      return pool[0].teacher;
+   453→   453→   453→    };
+   454→   454→   454→
+   455→   455→   455→    allSlots.forEach(slot => {
+   456→   456→   456→      const t1 = findTeacher(null, slot, false) || findTeacher(null, slot, true);
+   457→   457→   457→      if (t1) {
+   458→   458→   458→        tracking[t1.id].totalComm++;
+   459→   459→   459→        tracking[t1.id].dayComm[slot.day]++;
+   460→   460→   460→        tracking[t1.id].totalHours += slot.timeInfo.duration;
+   461→   461→   461→        tracking[t1.id].assignedSlots.push({ day: slot.day, start: slot.timeInfo.start, end: slot.timeInfo.end });
+   462→   462→   462→      }
+   463→   463→   463→      const t2 = findTeacher(t1?.id || null, slot, false) || findTeacher(t1?.id || null, slot, true);
+   464→   464→   464→      if (t2) {
+   465→   465→   465→        tracking[t2.id].totalComm++;
+   466→   466→   466→        tracking[t2.id].dayComm[slot.day]++;
+   467→   467→   467→        tracking[t2.id].totalHours += slot.timeInfo.duration;
+   468→   468→   468→        tracking[t2.id].assignedSlots.push({ day: slot.day, start: slot.timeInfo.start, end: slot.timeInfo.end });
+   469→   469→   469→      }
+   470→   470→   470→
+   471→   471→   471→      const dayGroup = finalAssignments[slot.day];
+   472→   472→   472→      const sessionGroup = dayGroup.find(s => s.grade === slot.grade && s.time === slot.time);
+   473→   473→   473→      if (sessionGroup) {
+   474→   474→   474→        sessionGroup.committees.push({
+   475→   475→   475→          serial: slot.comId,
+   476→   476→   476→          t1: t1 ? { id: t1.id, name: t1.name } : { id: null, name: 'Standby Monitor' },
+   477→   477→   477→          t2: t2 ? { id: t2.id, name: t2.name } : { id: null, name: 'Standby Monitor' }
+   478→   478→   478→        });
+   479→   479→   479→      }
+   480→   480→   480→    });
+   481→   481→   481→
+   482→   482→   482→    const newResults = { assignments: finalAssignments, tracking };
+   483→   483→   483→    setResults(newResults);
+   484→   484→   484→
+   485→   485→   485→    // Save to server
+   486→   486→   486→    fetch('/api/results', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: newResults }) });
+   487→   487→   487→    showToast('Distribution complete!', 'success');
+   488→   488→   488→    setActivePage('results');
+   489→   489→   489→  };
+   490→   490→   490→
+   491→   491→   491→  // ========== EXPORT CSV ==========
+   492→   492→   492→  const exportCSV = () => {
+   493→   493→   493→    if (!results?.assignments) return;
+   494→   494→   494→    let csv = 'Day,Grade,Time,Subject,Committee,Supervisor1,Supervisor2\n';
+   495→   495→   495→    DAYS.forEach(day => {
+   496→   496→   496→      const sessions = results.assignments[day] || [];
+   497→   497→   497→      sessions.forEach(s => {
+   498→   498→   498→        s.committees.forEach(c => {
+   499→   499→   499→          csv += `"${day}","${s.grade}","${s.time}","${s.subject || ''}","Room ${c.serial}","${c.t1.name}","${c.t2.name}"\n`;
+   500→   500→   500→        });
+
+[showing lines 1-500 of 1047; use offset=501 with limit to continue reading]

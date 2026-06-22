@@ -22,21 +22,30 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Array expected' }, { status: 400 })
     }
 
+    // Only save cells that have data
+    const cellsToSave = body.filter(
+      (cell: { grade: string; day: string; committees: number }) => cell.committees > 0
+    )
+
+    if (cellsToSave.length === 0) {
+      // Delete all if empty
+      await supabase.from('schedule_cells').delete().neq('id', '00000000-0000-0000-0000-000000000000')
+      return NextResponse.json({ success: true })
+    }
+
     // Delete all existing, then insert new
     await supabase.from('schedule_cells').delete().neq('id', '00000000-0000-0000-0000-000000000000')
 
-    if (body.length > 0) {
-      const { error } = await supabase.from('schedule_cells').insert(
-        body.map((cell: { grade: string; day: string; committees: number; subject: string; time: string }) => ({
-          grade: cell.grade,
-          day: cell.day,
-          committees: cell.committees || 0,
-          subject: cell.subject || '',
-          time: cell.time || ''
-        }))
-      )
-      if (error) throw error
-    }
+    const { error } = await supabase.from('schedule_cells').insert(
+      cellsToSave.map((cell: { grade: string; day: string; committees: number; subject: string; time: string }) => ({
+        grade: cell.grade,
+        day: cell.day,
+        committees: cell.committees || 0,
+        subject: cell.subject || '',
+        time: cell.time || ''
+      }))
+    )
+    if (error) throw error
 
     return NextResponse.json({ success: true })
   } catch (e) {

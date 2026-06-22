@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback, useRef } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { createClient, RealtimeChannel } from '@supabase/supabase-js';
 
 // ========== CONSTANTS ==========
@@ -369,59 +369,6 @@ export default function ExamSystem() {
       });
     });
 
-    const queryTeacher = (blockedId: string | null) => {
-      let pool: { teacher: Teacher; matchScore: number; totalComm: number; totalHours: number }[] = [];
-      const tryPool = (relaxDayLimit: boolean) => {
-        pool = [];
-        teachers.forEach(t => {
-          if (blockedId && t.id === blockedId) return;
-          const tr = tracking[t.id];
-          if (ruleSubject && t.subject && allSlots.length > 0) { /* will check per slot */ }
-          return;
-        });
-        return pool;
-      };
-
-      return (blockedId: string | null, slot: typeof allSlots[0]) => {
-        let pool: { teacher: Teacher; matchScore: number; totalComm: number; totalHours: number }[] = [];
-
-        const search = (relaxDay: boolean) => {
-          pool = [];
-          teachers.forEach(t => {
-            if (blockedId && t.id === blockedId) return;
-            const tr = tracking[t.id];
-            if (ruleSubject && slot.subject && t.subject === slot.subject) return;
-            let hasOverlap = tr.assignedSlots.some(s => s.day === slot.day && !(slot.timeInfo.end <= s.start || slot.timeInfo.start >= s.end));
-            if (hasOverlap) return;
-            if (!relaxDay && ruleDayLimit && tr.dayComm[slot.day] >= 1) return;
-            let todayHours = 0;
-            const seen = new Set<string>();
-            tr.assignedSlots.filter(s => s.day === slot.day).forEach(s => {
-              const k = s.start + '_' + s.end;
-              if (!seen.has(k)) { seen.add(k); todayHours += (s.end - s.start) / 60; }
-            });
-            if (todayHours + slot.timeInfo.duration > 5) return;
-            let matchScore = 0;
-            if (ruleNotes && t.notes && slot.stage !== 'any' && t.notes.toLowerCase().includes(slot.stage)) matchScore = 1;
-            pool.push({ teacher: t, matchScore, totalComm: tr.totalComm, totalHours: tr.totalHours });
-          });
-        };
-
-        search(false);
-        if (pool.length === 0) search(true); // relax day limit
-        if (pool.length === 0) return null;
-
-        pool.sort((a, b) => {
-          if (a.totalComm !== b.totalComm) return a.totalComm - b.totalComm;
-          if (Math.abs(a.totalHours - b.totalHours) > 0.001) return a.totalHours - b.totalHours;
-          if (b.matchScore !== a.matchScore) return b.matchScore - a.matchScore;
-          return a.teacher.id.localeCompare(b.teacher.id);
-        });
-        return pool[0].teacher;
-      };
-    };
-
-    // Re-define queryTeacher properly
     const findTeacher = (blockedId: string | null, slot: typeof allSlots[0], relaxDay: boolean = false): Teacher | null => {
       let pool: { teacher: Teacher; matchScore: number; totalComm: number; totalHours: number }[] = [];
       teachers.forEach(t => {
@@ -662,7 +609,7 @@ export default function ExamSystem() {
     <div className="card">
       <div className="card-header">
         <div className="card-title">خريطة الجدول الامتحاني</div>
-        {isAdmin && <button className="btn btn-primary" onClick={saveSchedule}>💾 حفظ الجدول</button>}
+        <button className="btn btn-primary" onClick={saveSchedule}>💾 حفظ الجدول</button>
       </div>
       <div className="table-wrap" style={{ maxHeight: '70vh', overflow: 'auto' }}>
         <div className="schedule-grid">
@@ -1043,5 +990,3 @@ export default function ExamSystem() {
   );
 }
 
-// Need React import for Fragment
-import React from 'react';
