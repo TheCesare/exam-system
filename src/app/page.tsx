@@ -1,7 +1,7 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
-import { io, Socket } from 'socket.io-client';
+import { useEffect, useState, useCallback, useRef } from 'react';
+import { createClient, RealtimeChannel } from '@supabase/supabase-js';
 
 // ========== CONSTANTS ==========
 const DAYS = ['Saturday','Sunday','Monday','Tuesday','Wednesday','Thursday'];
@@ -67,7 +67,7 @@ export default function ExamSystem() {
   const [view, setView] = useState<View>('login');
   const [password, setPassword] = useState('');
   const [loginError, setLoginError] = useState('');
-  const [isConnected, setIsConnected] = useState(false);
+  const [isConnected, setIsConnected] = useState(true); // Assume connected until proven otherwise
 
   // Data state
   const [teachers, setTeachers] = useState<Teacher[]>([]);
@@ -86,8 +86,8 @@ export default function ExamSystem() {
   // Schedule edit buffer (local edits before saving)
   const [scheduleBuffer, setScheduleBuffer] = useState<Record<string, ScheduleCell>>({});
 
-  // Ref for socket
-  const socketRef = useState<Socket | null>(null)[0];
+  // Ref for Supabase realtime channels
+  const channelsRef = useRef<RealtimeChannel[]>([]);
 
   // ========== LOAD DATA ==========
   const loadTeachers = useCallback(async () => {
@@ -127,35 +127,45 @@ export default function ExamSystem() {
       .finally(() => setLoading(false));
   }, [loadTeachers, loadSchedule, loadResults]);
 
-  // ========== WEBSOCKET ==========
+  // ========== SUPABASE REALTIME ==========
   useEffect(() => {
-    const socket = io('/?XTransformPort=3003', {
-      transports: ['websocket', 'polling'],
-      forceNew: true,
-      reconnection: true,
-      reconnectionAttempts: 10,
-      reconnectionDelay: 1000,
-      timeout: 10000
-    });
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+    if (!supabaseUrl || !supabaseKey) return;
 
-    socket.on('connect', () => setIsConnected(true));
-    socket.on('disconnect', () => setIsConnected(false));
+    const sb = createClient(supabaseUrl, supabaseKey);
 
-    // Real-time sync events
-    socket.on('teacher-added', () => loadTeachers());
-    socket.on('teacher-updated', () => loadTeachers());
-    socket.on('teacher-deleted', () => loadTeachers());
-    socket.on('teachers-replaced', () => loadTeachers());
-    socket.on('schedule-updated', () => loadSchedule());
-    socket.on('results-ready', () => loadResults());
-    socket.on('data-reset', () => { loadAll(); showToast('تم مسح جميع البيانات', 'info'); });
+    // Subscribe to teachers changes
+    const teachersCh = sb.channel('teachers-changes')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'teachers' }, () => {
+        loadTeachers();
+      })
+      .subscribe((status) => {
+        setIsConnected(status === 'SUBSCRIBED');
+      });
 
-    // Store socket ref
-    (socket as unknown as { _ref: Socket })._ref = socket;
-    Object.assign(window, { __examSocket: socket });
+    // Subscribe to schedule changes
+    const scheduleCh = sb.channel('schedule-changes')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'schedule_cells' }, () => {
+        loadSchedule();
+      })
+      .subscribe();
 
-    return () => { socket.disconnect(); };
-  }, [loadTeachers, loadSchedule, loadResults, loadAll]);
+    // Subscribe to results changes
+    const resultsCh = sb.channel('results-changes')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'distribution_results' }, () => {
+        loadResults();
+      })
+      .subscribe();
+
+    channelsRef.current = [teachersCh, scheduleCh, resultsCh];
+
+    return () => {
+      teachersCh.unsubscribe();
+      scheduleCh.unsubscribe();
+      resultsCh.unsubscribe();
+    };
+  }, [loadTeachers, loadSchedule, loadResults]);
 
   // ========== AUTH ==========
   const handleLogin = async (role: 'user' | 'admin') => {
@@ -201,8 +211,6 @@ export default function ExamSystem() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ id: editTeacherId, name: formName.trim(), subject: formSubject, notes: formNotes.trim() })
         });
-        const sock = (window as unknown as { __examSocket?: Socket }).__examSocket;
-        sock?.emit('teacher-updated', {});
         showToast('تم تعديل المعلم', 'success');
       } else {
         await fetch('/api/teachers', {
@@ -210,8 +218,6 @@ export default function ExamSystem() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ name: formName.trim(), subject: formSubject, notes: formNotes.trim() })
         });
-        const sock = (window as unknown as { __examSocket?: Socket }).__examSocket;
-        sock?.emit('teacher-added', {});
         showToast('تم إضافة المعلم', 'success');
       }
       cancelEdit();
@@ -223,8 +229,6 @@ export default function ExamSystem() {
     if (!confirm('Delete this teacher?')) return;
     try {
       await fetch(`/api/teachers?id=${id}`, { method: 'DELETE' });
-      const sock = (window as unknown as { __examSocket?: Socket }).__examSocket;
-      sock?.emit('teacher-deleted', {});
       loadTeachers();
       showToast('تم حذف المعلم', 'success');
     } catch { showToast('Error deleting', 'error'); }
@@ -263,8 +267,6 @@ export default function ExamSystem() {
     }
     try {
       await fetch('/api/distribute', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ teachers: demoTeachers }) });
-      const sock = (window as unknown as { __examSocket?: Socket }).__examSocket;
-      sock?.emit('teachers-replaced', {});
       loadTeachers();
       showToast('Added 200 teachers!', 'success');
     } catch { showToast('Error', 'error'); }
@@ -286,8 +288,6 @@ export default function ExamSystem() {
       if (imported.length === 0) { showToast('No valid data in CSV', 'error'); return; }
       try {
         await fetch('/api/distribute', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ teachers: imported }) });
-        const sock = (window as unknown as { __examSocket?: Socket }).__examSocket;
-        sock?.emit('teachers-replaced', {});
         loadTeachers();
         showToast(`Imported ${imported.length} teachers`, 'success');
       } catch { showToast('Import error', 'error'); }
@@ -308,8 +308,6 @@ export default function ExamSystem() {
     const cells = Object.values(scheduleBuffer);
     try {
       await fetch('/api/schedule', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(cells) });
-      const sock = (window as unknown as { __examSocket?: Socket }).__examSocket;
-      sock?.emit('schedule-updated', {});
       showToast('Schedule saved!', 'success');
       loadSchedule();
     } catch { showToast('Error saving schedule', 'error'); }
@@ -486,8 +484,6 @@ export default function ExamSystem() {
 
     // Save to server
     fetch('/api/results', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: newResults }) });
-    const sock = (window as unknown as { __examSocket?: Socket }).__examSocket;
-    sock?.emit('results-ready', {});
     showToast('Distribution complete!', 'success');
     setActivePage('results');
   };
@@ -515,8 +511,6 @@ export default function ExamSystem() {
   const resetAll = async () => {
     if (!confirm('Reset ALL data?')) return;
     await fetch('/api/distribute', { method: 'DELETE' });
-    const sock = (window as unknown as { __examSocket?: Socket }).__examSocket;
-    sock?.emit('data-reset', {});
     loadAll();
     setResults(null);
   };

@@ -1,10 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { db } from '@/lib/db'
+import { supabase } from '@/lib/supabase'
 
 export async function GET() {
   try {
-    const cells = await db.scheduleCell.findMany({ orderBy: [{ grade: 'asc' }, { day: 'asc' }] })
-    return NextResponse.json(cells)
+    const { data, error } = await supabase
+      .from('schedule_cells')
+      .select('*')
+      .order('grade', { ascending: true })
+      .order('day', { ascending: true })
+    if (error) throw error
+    return NextResponse.json(data || [])
   } catch {
     return NextResponse.json({ error: 'Failed' }, { status: 500 })
   }
@@ -13,28 +18,24 @@ export async function GET() {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
-    // body is array of { grade, day, committees, subject, time }
     if (!Array.isArray(body)) {
       return NextResponse.json({ error: 'Array expected' }, { status: 400 })
     }
 
-    // Upsert each cell
-    for (const cell of body) {
-      await db.scheduleCell.upsert({
-        where: { grade_day: { grade: cell.grade, day: cell.day } },
-        update: {
-          committees: cell.committees || 0,
-          subject: cell.subject || '',
-          time: cell.time || ''
-        },
-        create: {
+    // Delete all existing, then insert new
+    await supabase.from('schedule_cells').delete().neq('id', '00000000-0000-0000-0000-000000000000')
+
+    if (body.length > 0) {
+      const { error } = await supabase.from('schedule_cells').insert(
+        body.map((cell: { grade: string; day: string; committees: number; subject: string; time: string }) => ({
           grade: cell.grade,
           day: cell.day,
           committees: cell.committees || 0,
           subject: cell.subject || '',
           time: cell.time || ''
-        }
-      })
+        }))
+      )
+      if (error) throw error
     }
 
     return NextResponse.json({ success: true })

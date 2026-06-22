@@ -1,10 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { db } from '@/lib/db'
+import { supabase } from '@/lib/supabase'
 
 export async function GET() {
   try {
-    const teachers = await db.teacher.findMany({ orderBy: { createdAt: 'asc' } })
-    return NextResponse.json(teachers)
+    const { data, error } = await supabase
+      .from('teachers')
+      .select('*')
+      .order('created_at', { ascending: true })
+    if (error) throw error
+    return NextResponse.json(data || [])
   } catch {
     return NextResponse.json({ error: 'Failed to fetch' }, { status: 500 })
   }
@@ -16,10 +20,13 @@ export async function POST(request: NextRequest) {
     if (!name || !subject) {
       return NextResponse.json({ error: 'Name and subject required' }, { status: 400 })
     }
-    const teacher = await db.teacher.create({
-      data: { name, subject, notes: notes || '' }
-    })
-    return NextResponse.json(teacher)
+    const { data, error } = await supabase
+      .from('teachers')
+      .insert({ name, subject, notes: notes || '' })
+      .select()
+      .single()
+    if (error) throw error
+    return NextResponse.json(data)
   } catch {
     return NextResponse.json({ error: 'Failed to create' }, { status: 500 })
   }
@@ -29,11 +36,14 @@ export async function PUT(request: NextRequest) {
   try {
     const { id, name, subject, notes } = await request.json()
     if (!id) return NextResponse.json({ error: 'ID required' }, { status: 400 })
-    const teacher = await db.teacher.update({
-      where: { id },
-      data: { name, subject, notes }
-    })
-    return NextResponse.json(teacher)
+    const { data, error } = await supabase
+      .from('teachers')
+      .update({ name, subject, notes })
+      .eq('id', id)
+      .select()
+      .single()
+    if (error) throw error
+    return NextResponse.json(data)
   } catch {
     return NextResponse.json({ error: 'Failed to update' }, { status: 500 })
   }
@@ -44,7 +54,8 @@ export async function DELETE(request: NextRequest) {
     const { searchParams } = new URL(request.url)
     const id = searchParams.get('id')
     if (!id) return NextResponse.json({ error: 'ID required' }, { status: 400 })
-    await db.teacher.delete({ where: { id } })
+    const { error } = await supabase.from('teachers').delete().eq('id', id)
+    if (error) throw error
     return NextResponse.json({ success: true })
   } catch {
     return NextResponse.json({ error: 'Failed to delete' }, { status: 500 })

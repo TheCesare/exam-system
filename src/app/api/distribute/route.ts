@@ -1,22 +1,24 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { db } from '@/lib/db'
+import { supabase } from '@/lib/supabase'
 
-// Bulk replace all teachers (for import/demo)
+// Bulk replace all teachers
 export async function POST(request: NextRequest) {
   try {
     const { teachers } = await request.json()
     if (!Array.isArray(teachers)) {
       return NextResponse.json({ error: 'Array expected' }, { status: 400 })
     }
-    await db.teacher.deleteMany()
-    const created = await db.teacher.createMany({
-      data: teachers.map((t: { name: string; subject: string; notes: string }) => ({
+    // Delete all, insert new
+    await supabase.from('teachers').delete().neq('id', '00000000-0000-0000-0000-000000000000')
+    const { error } = await supabase.from('teachers').insert(
+      teachers.map((t: { name: string; subject: string; notes: string }) => ({
         name: t.name,
         subject: t.subject,
         notes: t.notes || ''
       }))
-    })
-    return NextResponse.json({ success: true, count: created.count })
+    )
+    if (error) throw error
+    return NextResponse.json({ success: true, count: teachers.length })
   } catch (e) {
     console.error(e)
     return NextResponse.json({ error: 'Failed' }, { status: 500 })
@@ -26,9 +28,9 @@ export async function POST(request: NextRequest) {
 // Reset all data
 export async function DELETE() {
   try {
-    await db.teacher.deleteMany()
-    await db.scheduleCell.deleteMany()
-    await db.distributionResult.deleteMany()
+    await supabase.from('teachers').delete().neq('id', '00000000-0000-0000-0000-000000000000')
+    await supabase.from('schedule_cells').delete().neq('id', '00000000-0000-0000-0000-000000000000')
+    await supabase.from('distribution_results').delete().neq('id', '00000000-0000-0000-0000-000000000000')
     return NextResponse.json({ success: true })
   } catch {
     return NextResponse.json({ error: 'Failed' }, { status: 500 })
