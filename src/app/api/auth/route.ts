@@ -1,10 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server'
 
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'Msan@01245893610'
+const USER_PASSWORD = process.env.USER_PASSWORD || 'u12345'
 
 export async function POST(request: NextRequest) {
   try {
-    const { password } = await request.json()
+    const { password, role } = await request.json()
+    
+    if (role === 'user') {
+      if (password === USER_PASSWORD) {
+        return NextResponse.json({ success: true, role: 'user' })
+      }
+      return NextResponse.json({ success: false, message: 'كلمة السر غلط' }, { status: 401 })
+    }
+    
     if (password === ADMIN_PASSWORD) {
       return NextResponse.json({ success: true, role: 'admin' })
     }
