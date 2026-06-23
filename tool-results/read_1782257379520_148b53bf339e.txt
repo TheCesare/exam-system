@@ -1,0 +1,502 @@
+     1→     1→     1→'use client';
+     2→     2→     2→
+     3→     3→     3→import React, { useEffect, useState, useCallback, useRef } from 'react';
+     4→     4→     4→import { createClient, RealtimeChannel } from '@supabase/supabase-js';
+     5→     5→     5→import jsPDF from 'jspdf';
+     6→     6→     6→import autoTable from 'jspdf-autotable';
+     7→     7→     7→
+     8→     8→     8→// ========== CONSTANTS ==========
+     9→     9→     9→const DAYS = ['Saturday','Sunday','Monday','Tuesday','Wednesday','Thursday'];
+    10→    10→    10→const GRADES = [
+    11→    11→    11→  'Grade 3 Primary','Grade 4 Primary','Grade 5 Primary','Grade 6 Primary',
+    12→    12→    12→  'Grade 1 Prep','Grade 2 Prep','Grade 1 Secondary','Grade 2 Secondary'
+    13→    13→    13→];
+    14→    14→    14→const SUBJECTS = ['Math','Science','Arabic','English','French','Social Studies',
+    15→    15→    15→                  'Arts','Computer','Library','Religion','Psychology','Admin','Other'];
+    16→    16→    16→const DEFAULT_TIMES: Record<string,string> = {
+    17→    17→    17→  'Grade 3 Primary':'9:00-10:30','Grade 4 Primary':'9:00-10:30',
+    18→    18→    18→  'Grade 5 Primary':'9:00-10:30','Grade 6 Primary':'9:00-10:30',
+    19→    19→    19→  'Grade 1 Prep':'9:00-11:00','Grade 2 Prep':'9:00-11:00',
+    20→    20→    20→  'Grade 1 Secondary':'12:00-14:00','Grade 2 Secondary':'8:30-10:30'
+    21→    21→    21→};
+    22→    22→    22→
+    23→    23→    23→// ========== TYPES ==========
+    24→    24→    24→interface Teacher { id: string; name: string; subject: string; notes: string; }
+    25→    25→    25→interface ScheduleCell { id?: string; grade: string; day: string; committees: number; subject: string; time: string; }
+    26→    26→    26→interface TrackingEntry { totalComm: number; totalHours: number; dayComm: Record<string,number>; assignedSlots: {day:string;start:number;end:number}[]; }
+    27→    27→    27→interface CommitteeResult { serial: number; t1: {id:string|null;name:string}; t2: {id:string|null;name:string}; }
+    28→    28→    28→interface SessionResult { grade: string; time: string; subject: string; committees: CommitteeResult[]; }
+    29→    29→    29→
+    30→    30→    30→type View = 'login' | 'user' | 'admin';
+    31→    31→    31→type Page = 'teachers' | 'schedule' | 'distribute' | 'results' | 'stats';
+    32→    32→    32→
+    33→    33→    33→// ========== HELPERS ==========
+    34→    34→    34→function parseTimeRange(tStr: string) {
+    35→    35→    35→  if (!tStr || !tStr.includes('-')) return { start: 540, end: 630, duration: 1.5 };
+    36→    36→    36→  try {
+    37→    37→    37→    let clean = tStr.replace(/\s+/g, '').replace(/—/g, '-').replace(/–/g, '-');
+    38→    38→    38→    const parts = clean.split('-');
+    39→    39→    39→    const toMinutes = (s: string) => { const p = s.split(':'); return (parseInt(p[0])||0)*60 + (parseInt(p[1])||0); };
+    40→    40→    40→    let start = toMinutes(parts[0]);
+    41→    41→    41→    let end = toMinutes(parts[1]);
+    42→    42→    42→    if (end <= start) end += 720;
+    43→    43→    43→    return { start, end, duration: (end - start) / 60 };
+    44→    44→    44→  } catch { return { start: 540, end: 630, duration: 1.5 }; }
+    45→    45→    45→}
+    46→    46→    46→
+    47→    47→    47→function getStage(grade: string) {
+    48→    48→    48→  const g = grade.toLowerCase();
+    49→    49→    49→  if (g.includes('primary')) return 'primary';
+    50→    50→    50→  if (g.includes('prep')) return 'prep';
+    51→    51→    51→  if (g.includes('secondary') || g.includes('sec')) return 'sec';
+    52→    52→    52→  return 'any';
+    53→    53→    53→}
+    54→    54→    54→
+    55→    55→    55→// ========== TOAST ==========
+    56→    56→    56→let toastTimer: ReturnType<typeof setTimeout> | null = null;
+    57→    57→    57→function showToast(msg: string, type: 'success' | 'error' | 'info' = 'info') {
+    58→    58→    58→  const el = document.getElementById('app-toast');
+    59→    59→    59→  if (!el) return;
+    60→    60→    60→  el.textContent = msg;
+    61→    61→    61→  el.className = 'toast show ' + type;
+    62→    62→    62→  if (toastTimer) clearTimeout(toastTimer);
+    63→    63→    63→  toastTimer = setTimeout(() => { el.className = 'toast'; }, 3000);
+    64→    64→    64→}
+    65→    65→    65→
+    66→    66→    66→// ========== MAIN COMPONENT ==========
+    67→    67→    67→export default function ExamSystem() {
+    68→    68→    68→  // Auth state
+    69→    69→    69→  const [view, setView] = useState<View>('login');
+    70→    70→    70→  const [password, setPassword] = useState('');
+    71→    71→    71→  const [loginError, setLoginError] = useState('');
+    72→    72→    72→  const [isConnected, setIsConnected] = useState(true);
+    73→    73→    73→  const [userCanEditTeachers, setUserCanEditTeachers] = useState(false);
+    74→    74→    74→
+    75→    75→    75→  // Data state
+    76→    76→    76→  const [teachers, setTeachers] = useState<Teacher[]>([]);
+    77→    77→    77→  const [schedule, setSchedule] = useState<ScheduleCell[]>([]);
+    78→    78→    78→  const [results, setResults] = useState<{ assignments: Record<string, SessionResult[]>; tracking: Record<string, TrackingEntry> } | null>(null);
+    79→    79→    79→
+    80→    80→    80→  // UI state
+    81→    81→    81→  const [activePage, setActivePage] = useState<Page>('teachers');
+    82→    82→    82→  const [showAddTeacher, setShowAddTeacher] = useState(false);
+    83→    83→    83→  const [editTeacherId, setEditTeacherId] = useState<string | null>(null);
+    84→    84→    84→  const [formName, setFormName] = useState('');
+    85→    85→    85→  const [formSubject, setFormSubject] = useState('');
+    86→    86→    86→  const [formNotes, setFormNotes] = useState('');
+    87→    87→    87→  const [loading, setLoading] = useState(true);
+    88→    88→    88→
+    89→    89→    89→  // Schedule edit buffer (local edits before saving)
+    90→    90→    90→  const [scheduleBuffer, setScheduleBuffer] = useState<Record<string, ScheduleCell>>({});
+    91→    91→    91→
+    92→    92→    92→  // Ref for Supabase realtime channels
+    93→    93→    93→  const channelsRef = useRef<RealtimeChannel[]>([]);
+    94→    94→    94→
+    95→    95→    95→  // ========== LOAD DATA ==========
+    96→    96→    96→  const loadTeachers = useCallback(async () => {
+    97→    97→    97→    try {
+    98→    98→    98→      const res = await fetch('/api/teachers');
+    99→    99→    99→      if (res.ok) setTeachers(await res.json());
+   100→   100→   100→    } catch { /* silent */ }
+   101→   101→   101→  }, []);
+   102→   102→   102→
+   103→   103→   103→  const loadSchedule = useCallback(async () => {
+   104→   104→   104→    try {
+   105→   105→   105→      const res = await fetch('/api/schedule');
+   106→   106→   106→      if (res.ok) {
+   107→   107→   107→        const data: ScheduleCell[] = await res.json();
+   108→   108→   108→        setSchedule(data);
+   109→   109→   109→        const buf: Record<string, ScheduleCell> = {};
+   110→   110→   110→        data.forEach(c => { buf[`${c.grade}__${c.day}`] = c; });
+   111→   111→   111→        setScheduleBuffer(buf);
+   112→   112→   112→      }
+   113→   113→   113→    } catch { /* silent */ }
+   114→   114→   114→  }, []);
+   115→   115→   115→
+   116→   116→   116→  const loadResults = useCallback(async () => {
+   117→   117→   117→    try {
+   118→   118→   118→      const res = await fetch('/api/results');
+   119→   119→   119→      if (res.ok) {
+   120→   120→   120→        const data = await res.json();
+   121→   121→   121→        if (data && data.data) setResults(data.data);
+   122→   122→   122→      }
+   123→   123→   123→    } catch { /* silent */ }
+   124→   124→   124→  }, []);
+   125→   125→   125→
+   126→   126→   126→  const loadAll = useCallback(() => {
+   127→   127→   127→    setLoading(true);
+   128→   128→   128→    Promise.all([loadTeachers(), loadSchedule(), loadResults()])
+   129→   129→   129→      .finally(() => setLoading(false));
+   130→   130→   130→  }, [loadTeachers, loadSchedule, loadResults]);
+   131→   131→   131→
+   132→   132→   132→  // ========== SUPABASE REALTIME ==========
+   133→   133→   133→  useEffect(() => {
+   134→   134→   134→    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+   135→   135→   135→    const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+   136→   136→   136→    if (!supabaseUrl || !supabaseKey) return;
+   137→   137→   137→
+   138→   138→   138→    const sb = createClient(supabaseUrl, supabaseKey);
+   139→   139→   139→
+   140→   140→   140→    const teachersCh = sb.channel('teachers-changes')
+   141→   141→   141→      .on('postgres_changes', { event: '*', schema: 'public', table: 'teachers' }, () => {
+   142→   142→   142→        loadTeachers();
+   143→   143→   143→      })
+   144→   144→   144→      .subscribe((status) => {
+   145→   145→   145→        setIsConnected(status === 'SUBSCRIBED');
+   146→   146→   146→      });
+   147→   147→   147→
+   148→   148→   148→    const scheduleCh = sb.channel('schedule-changes')
+   149→   149→   149→      .on('postgres_changes', { event: '*', schema: 'public', table: 'schedule_cells' }, () => {
+   150→   150→   150→        loadSchedule();
+   151→   151→   151→      })
+   152→   152→   152→      .subscribe();
+   153→   153→   153→
+   154→   154→   154→    const resultsCh = sb.channel('results-changes')
+   155→   155→   155→      .on('postgres_changes', { event: '*', schema: 'public', table: 'distribution_results' }, () => {
+   156→   156→   156→        loadResults();
+   157→   157→   157→      })
+   158→   158→   158→      .subscribe();
+   159→   159→   159→
+   160→   160→   160→    channelsRef.current = [teachersCh, scheduleCh, resultsCh];
+   161→   161→   161→
+   162→   162→   162→    return () => {
+   163→   163→   163→      teachersCh.unsubscribe();
+   164→   164→   164→      scheduleCh.unsubscribe();
+   165→   165→   165→      resultsCh.unsubscribe();
+   166→   166→   166→    };
+   167→   167→   167→  }, [loadTeachers, loadSchedule, loadResults]);
+   168→   168→   168→
+   169→   169→   169→  // ========== LOAD SETTINGS ==========
+   170→   170→   170→  const loadSettings = useCallback(async () => {
+   171→   171→   171→    try {
+   172→   172→   172→      const res = await fetch('/api/settings');
+   173→   173→   173→      if (res.ok) {
+   174→   174→   174→        const data = await res.json();
+   175→   175→   175→        setUserCanEditTeachers(!!data.user_can_edit_teachers);
+   176→   176→   176→      }
+   177→   177→   177→    } catch { /* silent */ }
+   178→   178→   178→  }, []);
+   179→   179→   179→
+   180→   180→   180→  const toggleUserEditPermission = async (val: boolean) => {
+   181→   181→   181→    try {
+   182→   182→   182→      await fetch('/api/settings', {
+   183→   183→   183→        method: 'PUT',
+   184→   184→   184→        headers: { 'Content-Type': 'application/json' },
+   185→   185→   185→        body: JSON.stringify({ user_can_edit_teachers: val })
+   186→   186→   186→      });
+   187→   187→   187→      setUserCanEditTeachers(val);
+   188→   188→   188→      showToast(val ? 'User edit permission enabled' : 'User edit permission disabled', 'info');
+   189→   189→   189→    } catch { showToast('Error updating settings', 'error'); }
+   190→   190→   190→  };
+   191→   191→   191→
+   192→   192→   192→  // ========== AUTH ==========
+   193→   193→   193→  const handleLogin = async (role: 'user' | 'admin') => {
+   194→   194→   194→    if (!password.trim()) { setLoginError('ادخل كلمة السر'); return; }
+   195→   195→   195→    try {
+   196→   196→   196→      const res = await fetch('/api/auth', {
+   197→   197→   197→        method: 'POST',
+   198→   198→   198→        headers: { 'Content-Type': 'application/json' },
+   199→   199→   199→        body: JSON.stringify({ password, role })
+   200→   200→   200→      });
+   201→   201→   201→      const data = await res.json();
+   202→   202→   202→      if (data.success) {
+   203→   203→   203→        setView(data.role);
+   204→   204→   204→        loadAll();
+   205→   205→   205→        loadSettings();
+   206→   206→   206→      } else {
+   207→   207→   207→        setLoginError(data.message || 'كلمة السر غلط');
+   208→   208→   208→      }
+   209→   209→   209→    } catch { setLoginError('Connection error'); }
+   210→   210→   210→  };
+   211→   211→   211→
+   212→   212→   212→  const handleLogout = () => {
+   213→   213→   213→    setView('login');
+   214→   214→   214→    setPassword('');
+   215→   215→   215→    setLoginError('');
+   216→   216→   216→    setTeachers([]);
+   217→   217→   217→    setSchedule([]);
+   218→   218→   218→    setResults(null);
+   219→   219→   219→    setUserCanEditTeachers(false);
+   220→   220→   220→  };
+   221→   221→   221→
+   222→   222→   222→  // ========== TEACHER ACTIONS ==========
+   223→   223→   223→
+   224→   224→   224→  const deleteTeacher = async (id: string) => {
+   225→   225→   225→    if (!isAdmin) { showToast('الحذف للادمن فقط', 'error'); return; }
+   226→   226→   226→    if (!confirm('Delete this teacher?')) return;
+   227→   227→   227→    try {
+   228→   228→   228→      await fetch(`/api/teachers?id=${id}`, { method: 'DELETE' });
+   229→   229→   229→      loadTeachers();
+   230→   230→   230→      showToast('Teacher deleted', 'success');
+   231→   231→   231→    } catch { showToast('Error deleting', 'error'); }
+   232→   232→   232→  };
+   233→   233→   233→
+   234→   234→   234→  const startEdit = (t: Teacher) => {
+   235→   235→   235→    if (!isAdmin && !userCanEditTeachers) { showToast('مفيش صلاحية تعديل - اسأل الادمن', 'error'); return; }
+   236→   236→   236→    setEditTeacherId(t.id);
+   237→   237→   237→    setFormName(t.name);
+   238→   238→   238→    setFormSubject(t.subject);
+   239→   239→   239→    setFormNotes(t.notes);
+   240→   240→   240→    setShowAddTeacher(true);
+   241→   241→   241→  };
+   242→   242→   242→
+   243→   243→   243→  const saveTeacher = async () => {
+   244→   244→   244→    if (!formName.trim() || !formSubject) { showToast('Please complete all fields', 'error'); return; }
+   245→   245→   245→    // User (with permission) can add and edit
+   246→   246→   246→    if (!isAdmin && !userCanEditTeachers) { showToast('مفيش صلاحية - اسأل الادمن', 'error'); return; }
+   247→   247→   247→    try {
+   248→   248→   248→      if (editTeacherId) {
+   249→   249→   249→        await fetch('/api/teachers', {
+   250→   250→   250→          method: 'PUT',
+   251→   251→   251→          headers: { 'Content-Type': 'application/json' },
+   252→   252→   252→          body: JSON.stringify({ id: editTeacherId, name: formName.trim(), subject: formSubject, notes: formNotes.trim() })
+   253→   253→   253→        });
+   254→   254→   254→        showToast('Teacher updated', 'success');
+   255→   255→   255→      } else {
+   256→   256→   256→        await fetch('/api/teachers', {
+   257→   257→   257→          method: 'POST',
+   258→   258→   258→          headers: { 'Content-Type': 'application/json' },
+   259→   259→   259→          body: JSON.stringify({ name: formName.trim(), subject: formSubject, notes: formNotes.trim() })
+   260→   260→   260→        });
+   261→   261→   261→        showToast('Teacher added successfully', 'success');
+   262→   262→   262→      }
+   263→   263→   263→      cancelEdit();
+   264→   264→   264→      loadTeachers();
+   265→   265→   265→    } catch { showToast('Error saving teacher', 'error'); }
+   266→   266→   266→  };
+   267→   267→   267→
+   268→   268→   268→  const cancelEdit = () => {
+   269→   269→   269→    setEditTeacherId(null);
+   270→   270→   270→    setFormName('');
+   271→   271→   271→    setFormSubject('');
+   272→   272→   272→    setFormNotes('');
+   273→   273→   273→    setShowAddTeacher(false);
+   274→   274→   274→  };
+   275→   275→   275→
+   276→   276→   276→  const generateDemoTeachers = async () => {
+   277→   277→   277→    const demoTeachers: { name: string; subject: string; notes: string }[] = [];
+   278→   278→   278→    let count = 1;
+   279→   279→   279→    for (let i = 1; i <= 15; i++) {
+   280→   280→   280→      demoTeachers.push({ name: `Math Specialist Expert T${count++}`, subject: 'Math', notes: i <= 9 ? 'prep, sec' : '' });
+   281→   281→   281→    }
+   282→   282→   282→    for (let i = 1; i <= 45; i++) demoTeachers.push({ name: `English Senior Faculty T${count++}`, subject: 'English', notes: '' });
+   283→   283→   283→    for (let i = 1; i <= 40; i++) demoTeachers.push({ name: `Arabic Lang Professor T${count++}`, subject: 'Arabic', notes: i <= 16 ? 'prep, sec' : '' });
+   284→   284→   284→    for (let i = 1; i <= 9; i++) demoTeachers.push({ name: `French Educator Staff T${count++}`, subject: 'French', notes: '' });
+   285→   285→   285→    for (let i = 1; i <= 8; i++) demoTeachers.push({ name: `Social Studies Instructor T${count++}`, subject: 'Social Studies', notes: i === 1 ? 'prep, sec' : '' });
+   286→   286→   286→    for (let i = 1; i <= 9; i++) demoTeachers.push({ name: `Pure Science Research T${count++}`, subject: 'Science', notes: '' });
+   287→   287→   287→    const otherSubs = ['Arts', 'Computer', 'Library', 'Religion', 'Psychology', 'Admin', 'Other'];
+   288→   288→   288→    for (let i = 1; i <= 74; i++) {
+   289→   289→   289→      demoTeachers.push({ name: `${otherSubs[i % otherSubs.length]} Resource Officer T${count++}`, subject: otherSubs[i % otherSubs.length], notes: '' });
+   290→   290→   290→    }
+   291→   291→   291→    try {
+   292→   292→   292→      await fetch('/api/distribute', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ teachers: demoTeachers }) });
+   293→   293→   293→      loadTeachers();
+   294→   294→   294→      showToast('Injected 200 Mock Teachers Successfully!', 'success');
+   295→   295→   295→    } catch { showToast('Error', 'error'); }
+   296→   296→   296→  };
+   297→   297→   297→
+   298→   298→   298→  const importCSV = () => {
+   299→   299→   299→    const input = document.createElement('input');
+   300→   300→   300→    input.type = 'file'; input.accept = '.csv';
+   301→   301→   301→    input.onchange = async (e) => {
+   302→   302→   302→      const file = (e.target as HTMLInputElement).files?.[0];
+   303→   303→   303→      if (!file) return;
+   304→   304→   304→      const text = await file.text();
+   305→   305→   305→      const lines = text.split('\n');
+   306→   306→   306→      const imported: { name: string; subject: string; notes: string }[] = [];
+   307→   307→   307→      lines.forEach(line => {
+   308→   308→   308→        const parts = line.split(',').map(p => p.trim());
+   309→   309→   309→        if (parts.length >= 2 && parts[0]) imported.push({ name: parts[0], subject: parts[1], notes: parts[2] || '' });
+   310→   310→   310→      });
+   311→   311→   311→      if (imported.length === 0) { showToast('No valid data in CSV', 'error'); return; }
+   312→   312→   312→      try {
+   313→   313→   313→        await fetch('/api/distribute', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ teachers: imported }) });
+   314→   314→   314→        loadTeachers();
+   315→   315→   315→        showToast(`Imported ${imported.length} teachers`, 'success');
+   316→   316→   316→      } catch { showToast('Import error', 'error'); }
+   317→   317→   317→    };
+   318→   318→   318→    input.click();
+   319→   319→   319→  };
+   320→   320→   320→
+   321→   321→   321→  // ========== SCHEDULE ACTIONS ==========
+   322→   322→   322→  const updateCell = (grade: string, day: string, field: 'committees' | 'subject' | 'time', value: string | number) => {
+   323→   323→   323→    const key = `${grade}__${day}`;
+   324→   324→   324→    setScheduleBuffer(prev => ({
+   325→   325→   325→      ...prev,
+   326→   326→   326→      [key]: { ...prev[key], grade, day, [field]: value, id: prev[key]?.id }
+   327→   327→   327→    }));
+   328→   328→   328→  };
+   329→   329→   329→
+   330→   330→   330→  const saveSchedule = async () => {
+   331→   331→   331→    const cells = Object.values(scheduleBuffer);
+   332→   332→   332→    try {
+   333→   333→   333→      await fetch('/api/schedule', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(cells) });
+   334→   334→   334→      showToast('Schedule saved!', 'success');
+   335→   335→   335→      loadSchedule();
+   336→   336→   336→    } catch { showToast('Error saving schedule', 'error'); }
+   337→   337→   337→  };
+   338→   338→   338→
+   339→   339→   339→  const resetSchedule = async () => {
+   340→   340→   340→    if (!confirm('Reset schedule?')) return;
+   341→   341→   341→    setScheduleBuffer({});
+   342→   342→   342→    try {
+   343→   343→   343→      await fetch('/api/schedule', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify([]) });
+   344→   344→   344→      loadSchedule();
+   345→   345→   345→      showToast('Schedule reset', 'info');
+   346→   346→   346→    } catch { /* silent */ }
+   347→   347→   347→  };
+   348→   348→   348→
+   349→   349→   349→  // ========== DISTRIBUTION ENGINE ==========
+   350→   350→   350→  const runDistribution = () => {
+   351→   351→   351→    if (teachers.length === 0) { showToast('Error: Registry empty!', 'error'); return; }
+   352→   352→   352→
+   353→   353→   353→    const ruleSubject = (document.getElementById('rule-subject') as HTMLInputElement)?.checked ?? true;
+   354→   354→   354→    const ruleDayLimit = (document.getElementById('rule-daylimit') as HTMLInputElement)?.checked ?? true;
+   355→   355→   355→    const ruleNotes = (document.getElementById('rule-notes') as HTMLInputElement)?.checked ?? true;
+   356→   356→   356→
+   357→   357→   357→    const tracking: Record<string, TrackingEntry> = {};
+   358→   358→   358→    teachers.forEach(t => {
+   359→   359→   359→      tracking[t.id] = { totalComm: 0, totalHours: 0, dayComm: {} as Record<string,number>, assignedSlots: [] };
+   360→   360→   360→      DAYS.forEach(d => { tracking[t.id].dayComm[d] = 0; });
+   361→   361→   361→    });
+   362→   362→   362→
+   363→   363→   363→    const allSlots: { day: string; grade: string; stage: string; subject: string; time: string; timeInfo: ReturnType<typeof parseTimeRange>; comId: number }[] = [];
+   364→   364→   364→    DAYS.forEach(day => {
+   365→   365→   365→      GRADES.forEach(grade => {
+   366→   366→   366→        const cell = scheduleBuffer[`${grade}__${day}`];
+   367→   367→   367→        if (cell && cell.committees > 0) {
+   368→   368→   368→          const timeInfo = parseTimeRange(cell.time || DEFAULT_TIMES[grade] || '9:00-10:30');
+   369→   369→   369→          for (let c = 1; c <= cell.committees; c++) {
+   370→   370→   370→            allSlots.push({ day, grade, stage: getStage(grade), subject: cell.subject || '', time: cell.time || DEFAULT_TIMES[grade] || '9:00-10:30', timeInfo, comId: c });
+   371→   371→   371→          }
+   372→   372→   372→        }
+   373→   373→   373→      });
+   374→   374→   374→    });
+   375→   375→   375→
+   376→   376→   376→    allSlots.sort((a, b) => b.timeInfo.duration - a.timeInfo.duration);
+   377→   377→   377→
+   378→   378→   378→    const finalAssignments: Record<string, SessionResult[]> = {};
+   379→   379→   379→    DAYS.forEach(d => { finalAssignments[d] = []; });
+   380→   380→   380→    DAYS.forEach(day => {
+   381→   381→   381→      GRADES.forEach(grade => {
+   382→   382→   382→        const cell = scheduleBuffer[`${grade}__${day}`];
+   383→   383→   383→        if (cell && cell.committees > 0) {
+   384→   384→   384→          const existing = finalAssignments[day].find(s => s.grade === grade && s.time === (cell.time || DEFAULT_TIMES[grade]));
+   385→   385→   385→          if (!existing) {
+   386→   386→   386→            finalAssignments[day].push({ grade, time: cell.time || DEFAULT_TIMES[grade] || '', subject: cell.subject || '', committees: [] });
+   387→   387→   387→          }
+   388→   388→   388→        }
+   389→   389→   389→      });
+   390→   390→   390→    });
+   391→   391→   391→
+   392→   392→   392→    const findTeacher = (blockedId: string | null, slot: typeof allSlots[0], relaxDay: boolean = false): Teacher | null => {
+   393→   393→   393→      let pool: { teacher: Teacher; matchScore: number; totalComm: number; totalHours: number }[] = [];
+   394→   394→   394→      teachers.forEach(t => {
+   395→   395→   395→        if (blockedId && t.id === blockedId) return;
+   396→   396→   396→        const tr = tracking[t.id];
+   397→   397→   397→        if (ruleSubject && slot.subject && t.subject === slot.subject) return;
+   398→   398→   398→        const hasOverlap = tr.assignedSlots.some(s => s.day === slot.day && !(slot.timeInfo.end <= s.start || slot.timeInfo.start >= s.end));
+   399→   399→   399→        if (hasOverlap) return;
+   400→   400→   400→        if (!relaxDay && ruleDayLimit && tr.dayComm[slot.day] >= 1) return;
+   401→   401→   401→        let todayHours = 0;
+   402→   402→   402→        const seen = new Set<string>();
+   403→   403→   403→        tr.assignedSlots.filter(s => s.day === slot.day).forEach(s => {
+   404→   404→   404→          const k = s.start + '_' + s.end;
+   405→   405→   405→          if (!seen.has(k)) { seen.add(k); todayHours += (s.end - s.start) / 60; }
+   406→   406→   406→        });
+   407→   407→   407→        if (todayHours + slot.timeInfo.duration > 5) return;
+   408→   408→   408→        let matchScore = 0;
+   409→   409→   409→        if (ruleNotes && t.notes && slot.stage !== 'any' && t.notes.toLowerCase().includes(slot.stage)) matchScore = 1;
+   410→   410→   410→        pool.push({ teacher: t, matchScore, totalComm: tr.totalComm, totalHours: tr.totalHours });
+   411→   411→   411→      });
+   412→   412→   412→      if (pool.length === 0) return null;
+   413→   413→   413→      pool.sort((a, b) => {
+   414→   414→   414→        if (a.totalComm !== b.totalComm) return a.totalComm - b.totalComm;
+   415→   415→   415→        if (Math.abs(a.totalHours - b.totalHours) > 0.001) return a.totalHours - b.totalHours;
+   416→   416→   416→        if (b.matchScore !== a.matchScore) return b.matchScore - a.matchScore;
+   417→   417→   417→        return a.teacher.id.localeCompare(b.teacher.id);
+   418→   418→   418→      });
+   419→   419→   419→      return pool[0].teacher;
+   420→   420→   420→    };
+   421→   421→   421→
+   422→   422→   422→    allSlots.forEach(slot => {
+   423→   423→   423→      const t1 = findTeacher(null, slot, false) || findTeacher(null, slot, true);
+   424→   424→   424→      if (t1) {
+   425→   425→   425→        tracking[t1.id].totalComm++;
+   426→   426→   426→        tracking[t1.id].dayComm[slot.day]++;
+   427→   427→   427→        tracking[t1.id].totalHours += slot.timeInfo.duration;
+   428→   428→   428→        tracking[t1.id].assignedSlots.push({ day: slot.day, start: slot.timeInfo.start, end: slot.timeInfo.end });
+   429→   429→   429→      }
+   430→   430→   430→      const t2 = findTeacher(t1?.id || null, slot, false) || findTeacher(t1?.id || null, slot, true);
+   431→   431→   431→      if (t2) {
+   432→   432→   432→        tracking[t2.id].totalComm++;
+   433→   433→   433→        tracking[t2.id].dayComm[slot.day]++;
+   434→   434→   434→        tracking[t2.id].totalHours += slot.timeInfo.duration;
+   435→   435→   435→        tracking[t2.id].assignedSlots.push({ day: slot.day, start: slot.timeInfo.start, end: slot.timeInfo.end });
+   436→   436→   436→      }
+   437→   437→   437→
+   438→   438→   438→      const dayGroup = finalAssignments[slot.day];
+   439→   439→   439→      const sessionGroup = dayGroup.find(s => s.grade === slot.grade && s.time === slot.time);
+   440→   440→   440→      if (sessionGroup) {
+   441→   441→   441→        sessionGroup.committees.push({
+   442→   442→   442→          serial: slot.comId,
+   443→   443→   443→          t1: t1 ? { id: t1.id, name: t1.name } : { id: null, name: 'Standby Monitor' },
+   444→   444→   444→          t2: t2 ? { id: t2.id, name: t2.name } : { id: null, name: 'Standby Monitor' }
+   445→   445→   445→        });
+   446→   446→   446→      }
+   447→   447→   447→    });
+   448→   448→   448→
+   449→   449→   449→    const newResults = { assignments: finalAssignments, tracking };
+   450→   450→   450→    setResults(newResults);
+   451→   451→   451→
+   452→   452→   452→    fetch('/api/results', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: newResults }) });
+   453→   453→   453→    showToast('Overlap Lock Secured! Schedules fully cleared. ✓', 'success');
+   454→   454→   454→    setActivePage('results');
+   455→   455→   455→  };
+   456→   456→   456→
+   457→   457→   457→  // ========== EXPORT CSV ==========
+   458→   458→   458→  const exportCSV = () => {
+   459→   459→   459→    if (!results?.assignments) return;
+   460→   460→   460→    let csv = 'Day,Grade,Time,Subject,Committee,Supervisor1,Supervisor2\n';
+   461→   461→   461→    DAYS.forEach(day => {
+   462→   462→   462→      const sessions = results.assignments[day] || [];
+   463→   463→   463→      sessions.forEach(s => {
+   464→   464→   464→        s.committees.forEach(c => {
+   465→   465→   465→          csv += `"${day}","${s.grade}","${s.time}","${s.subject || ''}","Room ${c.serial}","${c.t1.name}","${c.t2.name}"\n`;
+   466→   466→   466→        });
+   467→   467→   467→      });
+   468→   468→   468→    });
+   469→   469→   469→    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+   470→   470→   470→    const url = URL.createObjectURL(blob);
+   471→   471→   471→    const a = document.createElement('a');
+   472→   472→   472→    a.href = url; a.download = 'perfect_schedule.csv'; a.click();
+   473→   473→   473→    URL.revokeObjectURL(url);
+   474→   474→   474→  };
+   475→   475→   475→
+   476→   476→   476→  // ========== EXPORT PDF (A4 per grade per day) ==========
+   477→   477→   477→  const exportPDF = () => {
+   478→   478→   478→    if (!results?.assignments) return;
+   479→   479→   479→    const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+   480→   480→   480→    const pageW = 210, pageH = 297, margin = 15;
+   481→   481→   481→    let firstPage = true;
+   482→   482→   482→
+   483→   483→   483→    for (const day of DAYS) {
+   484→   484→   484→      const sessions = results.assignments[day] || [];
+   485→   485→   485→      for (const session of sessions) {
+   486→   486→   486→        if (session.committees.length === 0) continue;
+   487→   487→   487→
+   488→   488→   488→        if (!firstPage) doc.addPage();
+   489→   489→   489→        firstPage = false;
+   490→   490→   490→
+   491→   491→   491→        // Header
+   492→   492→   492→        doc.setFontSize(16);
+   493→   493→   493→        doc.setFont('helvetica', 'bold');
+   494→   494→   494→        doc.text('Exam Supervision Schedule', pageW / 2, margin + 5, { align: 'center' });
+   495→   495→   495→
+   496→   496→   496→        doc.setFontSize(11);
+   497→   497→   497→        doc.setFont('helvetica', 'normal');
+   498→   498→   498→        doc.text(`Day: ${day}`, margin, margin + 18);
+   499→   499→   499→        doc.text(`Grade: ${session.grade}`, margin + 80, margin + 18);
+   500→   500→   500→        doc.text(`Time: ${session.time}`, margin, margin + 26);
+
+[showing lines 1-500 of 1041; use offset=501 with limit to continue reading]

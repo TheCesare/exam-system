@@ -1,0 +1,1041 @@
+     1→'use client';
+     2→
+     3→import React, { useEffect, useState, useCallback, useRef } from 'react';
+     4→import { createClient, RealtimeChannel } from '@supabase/supabase-js';
+     5→import jsPDF from 'jspdf';
+     6→import autoTable from 'jspdf-autotable';
+     7→
+     8→// ========== CONSTANTS ==========
+     9→const DAYS = ['Saturday','Sunday','Monday','Tuesday','Wednesday','Thursday'];
+    10→const GRADES = [
+    11→  'Grade 3 Primary','Grade 4 Primary','Grade 5 Primary','Grade 6 Primary',
+    12→  'Grade 1 Prep','Grade 2 Prep','Grade 1 Secondary','Grade 2 Secondary'
+    13→];
+    14→const SUBJECTS = ['Math','Science','Arabic','English','French','Social Studies',
+    15→                  'Arts','Computer','Library','Religion','Psychology','Admin','Other'];
+    16→const DEFAULT_TIMES: Record<string,string> = {
+    17→  'Grade 3 Primary':'9:00-10:30','Grade 4 Primary':'9:00-10:30',
+    18→  'Grade 5 Primary':'9:00-10:30','Grade 6 Primary':'9:00-10:30',
+    19→  'Grade 1 Prep':'9:00-11:00','Grade 2 Prep':'9:00-11:00',
+    20→  'Grade 1 Secondary':'12:00-14:00','Grade 2 Secondary':'8:30-10:30'
+    21→};
+    22→
+    23→// ========== TYPES ==========
+    24→interface Teacher { id: string; name: string; subject: string; notes: string; }
+    25→interface ScheduleCell { id?: string; grade: string; day: string; committees: number; subject: string; time: string; }
+    26→interface TrackingEntry { totalComm: number; totalHours: number; dayComm: Record<string,number>; assignedSlots: {day:string;start:number;end:number}[]; }
+    27→interface CommitteeResult { serial: number; t1: {id:string|null;name:string}; t2: {id:string|null;name:string}; }
+    28→interface SessionResult { grade: string; time: string; subject: string; committees: CommitteeResult[]; }
+    29→
+    30→type View = 'login' | 'user' | 'admin';
+    31→type Page = 'teachers' | 'schedule' | 'distribute' | 'results' | 'stats';
+    32→
+    33→// ========== HELPERS ==========
+    34→function parseTimeRange(tStr: string) {
+    35→  if (!tStr || !tStr.includes('-')) return { start: 540, end: 630, duration: 1.5 };
+    36→  try {
+    37→    let clean = tStr.replace(/\s+/g, '').replace(/—/g, '-').replace(/–/g, '-');
+    38→    const parts = clean.split('-');
+    39→    const toMinutes = (s: string) => { const p = s.split(':'); return (parseInt(p[0])||0)*60 + (parseInt(p[1])||0); };
+    40→    let start = toMinutes(parts[0]);
+    41→    let end = toMinutes(parts[1]);
+    42→    if (end <= start) end += 720;
+    43→    return { start, end, duration: (end - start) / 60 };
+    44→  } catch { return { start: 540, end: 630, duration: 1.5 }; }
+    45→}
+    46→
+    47→function getStage(grade: string) {
+    48→  const g = grade.toLowerCase();
+    49→  if (g.includes('primary')) return 'primary';
+    50→  if (g.includes('prep')) return 'prep';
+    51→  if (g.includes('secondary') || g.includes('sec')) return 'sec';
+    52→  return 'any';
+    53→}
+    54→
+    55→// ========== TOAST ==========
+    56→let toastTimer: ReturnType<typeof setTimeout> | null = null;
+    57→function showToast(msg: string, type: 'success' | 'error' | 'info' = 'info') {
+    58→  const el = document.getElementById('app-toast');
+    59→  if (!el) return;
+    60→  el.textContent = msg;
+    61→  el.className = 'toast show ' + type;
+    62→  if (toastTimer) clearTimeout(toastTimer);
+    63→  toastTimer = setTimeout(() => { el.className = 'toast'; }, 3000);
+    64→}
+    65→
+    66→// ========== MAIN COMPONENT ==========
+    67→export default function ExamSystem() {
+    68→  // Auth state
+    69→  const [view, setView] = useState<View>('login');
+    70→  const [password, setPassword] = useState('');
+    71→  const [loginError, setLoginError] = useState('');
+    72→  const [isConnected, setIsConnected] = useState(true);
+    73→  const [userCanEditTeachers, setUserCanEditTeachers] = useState(false);
+    74→
+    75→  // Data state
+    76→  const [teachers, setTeachers] = useState<Teacher[]>([]);
+    77→  const [schedule, setSchedule] = useState<ScheduleCell[]>([]);
+    78→  const [results, setResults] = useState<{ assignments: Record<string, SessionResult[]>; tracking: Record<string, TrackingEntry> } | null>(null);
+    79→
+    80→  // UI state
+    81→  const [activePage, setActivePage] = useState<Page>('teachers');
+    82→  const [showAddTeacher, setShowAddTeacher] = useState(false);
+    83→  const [editTeacherId, setEditTeacherId] = useState<string | null>(null);
+    84→  const [formName, setFormName] = useState('');
+    85→  const [formSubject, setFormSubject] = useState('');
+    86→  const [formNotes, setFormNotes] = useState('');
+    87→  const [loading, setLoading] = useState(true);
+    88→
+    89→  // Schedule edit buffer (local edits before saving)
+    90→  const [scheduleBuffer, setScheduleBuffer] = useState<Record<string, ScheduleCell>>({});
+    91→
+    92→  // Ref for Supabase realtime channels
+    93→  const channelsRef = useRef<RealtimeChannel[]>([]);
+    94→
+    95→  // ========== LOAD DATA ==========
+    96→  const loadTeachers = useCallback(async () => {
+    97→    try {
+    98→      const res = await fetch('/api/teachers');
+    99→      if (res.ok) setTeachers(await res.json());
+   100→    } catch { /* silent */ }
+   101→  }, []);
+   102→
+   103→  const loadSchedule = useCallback(async () => {
+   104→    try {
+   105→      const res = await fetch('/api/schedule');
+   106→      if (res.ok) {
+   107→        const data: ScheduleCell[] = await res.json();
+   108→        setSchedule(data);
+   109→        const buf: Record<string, ScheduleCell> = {};
+   110→        data.forEach(c => { buf[`${c.grade}__${c.day}`] = c; });
+   111→        setScheduleBuffer(buf);
+   112→      }
+   113→    } catch { /* silent */ }
+   114→  }, []);
+   115→
+   116→  const loadResults = useCallback(async () => {
+   117→    try {
+   118→      const res = await fetch('/api/results');
+   119→      if (res.ok) {
+   120→        const data = await res.json();
+   121→        if (data && data.data) setResults(data.data);
+   122→      }
+   123→    } catch { /* silent */ }
+   124→  }, []);
+   125→
+   126→  const loadAll = useCallback(() => {
+   127→    setLoading(true);
+   128→    Promise.all([loadTeachers(), loadSchedule(), loadResults()])
+   129→      .finally(() => setLoading(false));
+   130→  }, [loadTeachers, loadSchedule, loadResults]);
+   131→
+   132→  // ========== SUPABASE REALTIME ==========
+   133→  useEffect(() => {
+   134→    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+   135→    const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+   136→    if (!supabaseUrl || !supabaseKey) return;
+   137→
+   138→    const sb = createClient(supabaseUrl, supabaseKey);
+   139→
+   140→    const teachersCh = sb.channel('teachers-changes')
+   141→      .on('postgres_changes', { event: '*', schema: 'public', table: 'teachers' }, () => {
+   142→        loadTeachers();
+   143→      })
+   144→      .subscribe((status) => {
+   145→        setIsConnected(status === 'SUBSCRIBED');
+   146→      });
+   147→
+   148→    const scheduleCh = sb.channel('schedule-changes')
+   149→      .on('postgres_changes', { event: '*', schema: 'public', table: 'schedule_cells' }, () => {
+   150→        loadSchedule();
+   151→      })
+   152→      .subscribe();
+   153→
+   154→    const resultsCh = sb.channel('results-changes')
+   155→      .on('postgres_changes', { event: '*', schema: 'public', table: 'distribution_results' }, () => {
+   156→        loadResults();
+   157→      })
+   158→      .subscribe();
+   159→
+   160→    channelsRef.current = [teachersCh, scheduleCh, resultsCh];
+   161→
+   162→    return () => {
+   163→      teachersCh.unsubscribe();
+   164→      scheduleCh.unsubscribe();
+   165→      resultsCh.unsubscribe();
+   166→    };
+   167→  }, [loadTeachers, loadSchedule, loadResults]);
+   168→
+   169→  // ========== LOAD SETTINGS ==========
+   170→  const loadSettings = useCallback(async () => {
+   171→    try {
+   172→      const res = await fetch('/api/settings');
+   173→      if (res.ok) {
+   174→        const data = await res.json();
+   175→        setUserCanEditTeachers(!!data.user_can_edit_teachers);
+   176→      }
+   177→    } catch { /* silent */ }
+   178→  }, []);
+   179→
+   180→  const toggleUserEditPermission = async (val: boolean) => {
+   181→    try {
+   182→      await fetch('/api/settings', {
+   183→        method: 'PUT',
+   184→        headers: { 'Content-Type': 'application/json' },
+   185→        body: JSON.stringify({ user_can_edit_teachers: val })
+   186→      });
+   187→      setUserCanEditTeachers(val);
+   188→      showToast(val ? 'User edit permission enabled' : 'User edit permission disabled', 'info');
+   189→    } catch { showToast('Error updating settings', 'error'); }
+   190→  };
+   191→
+   192→  // ========== AUTH ==========
+   193→  const handleLogin = async (role: 'user' | 'admin') => {
+   194→    if (!password.trim()) { setLoginError('ادخل كلمة السر'); return; }
+   195→    try {
+   196→      const res = await fetch('/api/auth', {
+   197→        method: 'POST',
+   198→        headers: { 'Content-Type': 'application/json' },
+   199→        body: JSON.stringify({ password, role })
+   200→      });
+   201→      const data = await res.json();
+   202→      if (data.success) {
+   203→        setView(data.role);
+   204→        loadAll();
+   205→        loadSettings();
+   206→      } else {
+   207→        setLoginError(data.message || 'كلمة السر غلط');
+   208→      }
+   209→    } catch { setLoginError('Connection error'); }
+   210→  };
+   211→
+   212→  const handleLogout = () => {
+   213→    setView('login');
+   214→    setPassword('');
+   215→    setLoginError('');
+   216→    setTeachers([]);
+   217→    setSchedule([]);
+   218→    setResults(null);
+   219→    setUserCanEditTeachers(false);
+   220→  };
+   221→
+   222→  // ========== TEACHER ACTIONS ==========
+   223→
+   224→  const deleteTeacher = async (id: string) => {
+   225→    if (!isAdmin) { showToast('الحذف للادمن فقط', 'error'); return; }
+   226→    if (!confirm('Delete this teacher?')) return;
+   227→    try {
+   228→      await fetch(`/api/teachers?id=${id}`, { method: 'DELETE' });
+   229→      loadTeachers();
+   230→      showToast('Teacher deleted', 'success');
+   231→    } catch { showToast('Error deleting', 'error'); }
+   232→  };
+   233→
+   234→  const startEdit = (t: Teacher) => {
+   235→    if (!isAdmin && !userCanEditTeachers) { showToast('مفيش صلاحية تعديل - اسأل الادمن', 'error'); return; }
+   236→    setEditTeacherId(t.id);
+   237→    setFormName(t.name);
+   238→    setFormSubject(t.subject);
+   239→    setFormNotes(t.notes);
+   240→    setShowAddTeacher(true);
+   241→  };
+   242→
+   243→  const saveTeacher = async () => {
+   244→    if (!formName.trim() || !formSubject) { showToast('Please complete all fields', 'error'); return; }
+   245→    // User (with permission) can add and edit
+   246→    if (!isAdmin && !userCanEditTeachers) { showToast('مفيش صلاحية - اسأل الادمن', 'error'); return; }
+   247→    try {
+   248→      if (editTeacherId) {
+   249→        await fetch('/api/teachers', {
+   250→          method: 'PUT',
+   251→          headers: { 'Content-Type': 'application/json' },
+   252→          body: JSON.stringify({ id: editTeacherId, name: formName.trim(), subject: formSubject, notes: formNotes.trim() })
+   253→        });
+   254→        showToast('Teacher updated', 'success');
+   255→      } else {
+   256→        await fetch('/api/teachers', {
+   257→          method: 'POST',
+   258→          headers: { 'Content-Type': 'application/json' },
+   259→          body: JSON.stringify({ name: formName.trim(), subject: formSubject, notes: formNotes.trim() })
+   260→        });
+   261→        showToast('Teacher added successfully', 'success');
+   262→      }
+   263→      cancelEdit();
+   264→      loadTeachers();
+   265→    } catch { showToast('Error saving teacher', 'error'); }
+   266→  };
+   267→
+   268→  const cancelEdit = () => {
+   269→    setEditTeacherId(null);
+   270→    setFormName('');
+   271→    setFormSubject('');
+   272→    setFormNotes('');
+   273→    setShowAddTeacher(false);
+   274→  };
+   275→
+   276→  const generateDemoTeachers = async () => {
+   277→    const demoTeachers: { name: string; subject: string; notes: string }[] = [];
+   278→    let count = 1;
+   279→    for (let i = 1; i <= 15; i++) {
+   280→      demoTeachers.push({ name: `Math Specialist Expert T${count++}`, subject: 'Math', notes: i <= 9 ? 'prep, sec' : '' });
+   281→    }
+   282→    for (let i = 1; i <= 45; i++) demoTeachers.push({ name: `English Senior Faculty T${count++}`, subject: 'English', notes: '' });
+   283→    for (let i = 1; i <= 40; i++) demoTeachers.push({ name: `Arabic Lang Professor T${count++}`, subject: 'Arabic', notes: i <= 16 ? 'prep, sec' : '' });
+   284→    for (let i = 1; i <= 9; i++) demoTeachers.push({ name: `French Educator Staff T${count++}`, subject: 'French', notes: '' });
+   285→    for (let i = 1; i <= 8; i++) demoTeachers.push({ name: `Social Studies Instructor T${count++}`, subject: 'Social Studies', notes: i === 1 ? 'prep, sec' : '' });
+   286→    for (let i = 1; i <= 9; i++) demoTeachers.push({ name: `Pure Science Research T${count++}`, subject: 'Science', notes: '' });
+   287→    const otherSubs = ['Arts', 'Computer', 'Library', 'Religion', 'Psychology', 'Admin', 'Other'];
+   288→    for (let i = 1; i <= 74; i++) {
+   289→      demoTeachers.push({ name: `${otherSubs[i % otherSubs.length]} Resource Officer T${count++}`, subject: otherSubs[i % otherSubs.length], notes: '' });
+   290→    }
+   291→    try {
+   292→      await fetch('/api/distribute', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ teachers: demoTeachers }) });
+   293→      loadTeachers();
+   294→      showToast('Injected 200 Mock Teachers Successfully!', 'success');
+   295→    } catch { showToast('Error', 'error'); }
+   296→  };
+   297→
+   298→  const importCSV = () => {
+   299→    const input = document.createElement('input');
+   300→    input.type = 'file'; input.accept = '.csv';
+   301→    input.onchange = async (e) => {
+   302→      const file = (e.target as HTMLInputElement).files?.[0];
+   303→      if (!file) return;
+   304→      const text = await file.text();
+   305→      const lines = text.split('\n');
+   306→      const imported: { name: string; subject: string; notes: string }[] = [];
+   307→      lines.forEach(line => {
+   308→        const parts = line.split(',').map(p => p.trim());
+   309→        if (parts.length >= 2 && parts[0]) imported.push({ name: parts[0], subject: parts[1], notes: parts[2] || '' });
+   310→      });
+   311→      if (imported.length === 0) { showToast('No valid data in CSV', 'error'); return; }
+   312→      try {
+   313→        await fetch('/api/distribute', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ teachers: imported }) });
+   314→        loadTeachers();
+   315→        showToast(`Imported ${imported.length} teachers`, 'success');
+   316→      } catch { showToast('Import error', 'error'); }
+   317→    };
+   318→    input.click();
+   319→  };
+   320→
+   321→  // ========== SCHEDULE ACTIONS ==========
+   322→  const updateCell = (grade: string, day: string, field: 'committees' | 'subject' | 'time', value: string | number) => {
+   323→    const key = `${grade}__${day}`;
+   324→    setScheduleBuffer(prev => ({
+   325→      ...prev,
+   326→      [key]: { ...prev[key], grade, day, [field]: value, id: prev[key]?.id }
+   327→    }));
+   328→  };
+   329→
+   330→  const saveSchedule = async () => {
+   331→    const cells = Object.values(scheduleBuffer);
+   332→    try {
+   333→      await fetch('/api/schedule', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(cells) });
+   334→      showToast('Schedule saved!', 'success');
+   335→      loadSchedule();
+   336→    } catch { showToast('Error saving schedule', 'error'); }
+   337→  };
+   338→
+   339→  const resetSchedule = async () => {
+   340→    if (!confirm('Reset schedule?')) return;
+   341→    setScheduleBuffer({});
+   342→    try {
+   343→      await fetch('/api/schedule', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify([]) });
+   344→      loadSchedule();
+   345→      showToast('Schedule reset', 'info');
+   346→    } catch { /* silent */ }
+   347→  };
+   348→
+   349→  // ========== DISTRIBUTION ENGINE ==========
+   350→  const runDistribution = () => {
+   351→    if (teachers.length === 0) { showToast('Error: Registry empty!', 'error'); return; }
+   352→
+   353→    const ruleSubject = (document.getElementById('rule-subject') as HTMLInputElement)?.checked ?? true;
+   354→    const ruleDayLimit = (document.getElementById('rule-daylimit') as HTMLInputElement)?.checked ?? true;
+   355→    const ruleNotes = (document.getElementById('rule-notes') as HTMLInputElement)?.checked ?? true;
+   356→
+   357→    const tracking: Record<string, TrackingEntry> = {};
+   358→    teachers.forEach(t => {
+   359→      tracking[t.id] = { totalComm: 0, totalHours: 0, dayComm: {} as Record<string,number>, assignedSlots: [] };
+   360→      DAYS.forEach(d => { tracking[t.id].dayComm[d] = 0; });
+   361→    });
+   362→
+   363→    const allSlots: { day: string; grade: string; stage: string; subject: string; time: string; timeInfo: ReturnType<typeof parseTimeRange>; comId: number }[] = [];
+   364→    DAYS.forEach(day => {
+   365→      GRADES.forEach(grade => {
+   366→        const cell = scheduleBuffer[`${grade}__${day}`];
+   367→        if (cell && cell.committees > 0) {
+   368→          const timeInfo = parseTimeRange(cell.time || DEFAULT_TIMES[grade] || '9:00-10:30');
+   369→          for (let c = 1; c <= cell.committees; c++) {
+   370→            allSlots.push({ day, grade, stage: getStage(grade), subject: cell.subject || '', time: cell.time || DEFAULT_TIMES[grade] || '9:00-10:30', timeInfo, comId: c });
+   371→          }
+   372→        }
+   373→      });
+   374→    });
+   375→
+   376→    allSlots.sort((a, b) => b.timeInfo.duration - a.timeInfo.duration);
+   377→
+   378→    const finalAssignments: Record<string, SessionResult[]> = {};
+   379→    DAYS.forEach(d => { finalAssignments[d] = []; });
+   380→    DAYS.forEach(day => {
+   381→      GRADES.forEach(grade => {
+   382→        const cell = scheduleBuffer[`${grade}__${day}`];
+   383→        if (cell && cell.committees > 0) {
+   384→          const existing = finalAssignments[day].find(s => s.grade === grade && s.time === (cell.time || DEFAULT_TIMES[grade]));
+   385→          if (!existing) {
+   386→            finalAssignments[day].push({ grade, time: cell.time || DEFAULT_TIMES[grade] || '', subject: cell.subject || '', committees: [] });
+   387→          }
+   388→        }
+   389→      });
+   390→    });
+   391→
+   392→    const findTeacher = (blockedId: string | null, slot: typeof allSlots[0], relaxDay: boolean = false): Teacher | null => {
+   393→      let pool: { teacher: Teacher; matchScore: number; totalComm: number; totalHours: number }[] = [];
+   394→      teachers.forEach(t => {
+   395→        if (blockedId && t.id === blockedId) return;
+   396→        const tr = tracking[t.id];
+   397→        if (ruleSubject && slot.subject && t.subject === slot.subject) return;
+   398→        const hasOverlap = tr.assignedSlots.some(s => s.day === slot.day && !(slot.timeInfo.end <= s.start || slot.timeInfo.start >= s.end));
+   399→        if (hasOverlap) return;
+   400→        if (!relaxDay && ruleDayLimit && tr.dayComm[slot.day] >= 1) return;
+   401→        let todayHours = 0;
+   402→        const seen = new Set<string>();
+   403→        tr.assignedSlots.filter(s => s.day === slot.day).forEach(s => {
+   404→          const k = s.start + '_' + s.end;
+   405→          if (!seen.has(k)) { seen.add(k); todayHours += (s.end - s.start) / 60; }
+   406→        });
+   407→        if (todayHours + slot.timeInfo.duration > 5) return;
+   408→        let matchScore = 0;
+   409→        if (ruleNotes && t.notes && slot.stage !== 'any' && t.notes.toLowerCase().includes(slot.stage)) matchScore = 1;
+   410→        pool.push({ teacher: t, matchScore, totalComm: tr.totalComm, totalHours: tr.totalHours });
+   411→      });
+   412→      if (pool.length === 0) return null;
+   413→      pool.sort((a, b) => {
+   414→        if (a.totalComm !== b.totalComm) return a.totalComm - b.totalComm;
+   415→        if (Math.abs(a.totalHours - b.totalHours) > 0.001) return a.totalHours - b.totalHours;
+   416→        if (b.matchScore !== a.matchScore) return b.matchScore - a.matchScore;
+   417→        return a.teacher.id.localeCompare(b.teacher.id);
+   418→      });
+   419→      return pool[0].teacher;
+   420→    };
+   421→
+   422→    allSlots.forEach(slot => {
+   423→      const t1 = findTeacher(null, slot, false) || findTeacher(null, slot, true);
+   424→      if (t1) {
+   425→        tracking[t1.id].totalComm++;
+   426→        tracking[t1.id].dayComm[slot.day]++;
+   427→        tracking[t1.id].totalHours += slot.timeInfo.duration;
+   428→        tracking[t1.id].assignedSlots.push({ day: slot.day, start: slot.timeInfo.start, end: slot.timeInfo.end });
+   429→      }
+   430→      const t2 = findTeacher(t1?.id || null, slot, false) || findTeacher(t1?.id || null, slot, true);
+   431→      if (t2) {
+   432→        tracking[t2.id].totalComm++;
+   433→        tracking[t2.id].dayComm[slot.day]++;
+   434→        tracking[t2.id].totalHours += slot.timeInfo.duration;
+   435→        tracking[t2.id].assignedSlots.push({ day: slot.day, start: slot.timeInfo.start, end: slot.timeInfo.end });
+   436→      }
+   437→
+   438→      const dayGroup = finalAssignments[slot.day];
+   439→      const sessionGroup = dayGroup.find(s => s.grade === slot.grade && s.time === slot.time);
+   440→      if (sessionGroup) {
+   441→        sessionGroup.committees.push({
+   442→          serial: slot.comId,
+   443→          t1: t1 ? { id: t1.id, name: t1.name } : { id: null, name: 'Standby Monitor' },
+   444→          t2: t2 ? { id: t2.id, name: t2.name } : { id: null, name: 'Standby Monitor' }
+   445→        });
+   446→      }
+   447→    });
+   448→
+   449→    const newResults = { assignments: finalAssignments, tracking };
+   450→    setResults(newResults);
+   451→
+   452→    fetch('/api/results', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: newResults }) });
+   453→    showToast('Overlap Lock Secured! Schedules fully cleared. ✓', 'success');
+   454→    setActivePage('results');
+   455→  };
+   456→
+   457→  // ========== EXPORT CSV ==========
+   458→  const exportCSV = () => {
+   459→    if (!results?.assignments) return;
+   460→    let csv = 'Day,Grade,Time,Subject,Committee,Supervisor1,Supervisor2\n';
+   461→    DAYS.forEach(day => {
+   462→      const sessions = results.assignments[day] || [];
+   463→      sessions.forEach(s => {
+   464→        s.committees.forEach(c => {
+   465→          csv += `"${day}","${s.grade}","${s.time}","${s.subject || ''}","Room ${c.serial}","${c.t1.name}","${c.t2.name}"\n`;
+   466→        });
+   467→      });
+   468→    });
+   469→    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+   470→    const url = URL.createObjectURL(blob);
+   471→    const a = document.createElement('a');
+   472→    a.href = url; a.download = 'perfect_schedule.csv'; a.click();
+   473→    URL.revokeObjectURL(url);
+   474→  };
+   475→
+   476→  // ========== EXPORT PDF (A4 per grade per day) ==========
+   477→  const exportPDF = () => {
+   478→    if (!results?.assignments) return;
+   479→    const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+   480→    const pageW = 210, pageH = 297, margin = 15;
+   481→    let firstPage = true;
+   482→
+   483→    for (const day of DAYS) {
+   484→      const sessions = results.assignments[day] || [];
+   485→      for (const session of sessions) {
+   486→        if (session.committees.length === 0) continue;
+   487→
+   488→        if (!firstPage) doc.addPage();
+   489→        firstPage = false;
+   490→
+   491→        // Header
+   492→        doc.setFontSize(16);
+   493→        doc.setFont('helvetica', 'bold');
+   494→        doc.text('Exam Supervision Schedule', pageW / 2, margin + 5, { align: 'center' });
+   495→
+   496→        doc.setFontSize(11);
+   497→        doc.setFont('helvetica', 'normal');
+   498→        doc.text(`Day: ${day}`, margin, margin + 18);
+   499→        doc.text(`Grade: ${session.grade}`, margin + 80, margin + 18);
+   500→        doc.text(`Time: ${session.time}`, margin, margin + 26);
+   501→        doc.text(`Subject: ${session.subject || '-'}`, margin + 80, margin + 26);
+   502→
+   503→        // Line separator
+   504→        doc.setDrawColor(100);
+   505→        doc.line(margin, margin + 30, pageW - margin, margin + 30);
+   506→
+   507→        // Table data
+   508→        const body = session.committees.map(c => [
+   509→          `Room ${c.serial}`,
+   510→          c.t1.name,
+   511→          '',
+   512→          c.t2.name,
+   513→          ''
+   514→        ]);
+   515→
+   516→        autoTable(doc, {
+   517→          startY: margin + 35,
+   518→          head: [['Room', 'Lead Supervisor', 'Signature', 'Associate Supervisor', 'Signature']],
+   519→          body: body,
+   520→          theme: 'grid',
+   521→          styles: { fontSize: 10, cellPadding: 3, halign: 'center' },
+   522→          headStyles: { fillColor: [30, 58, 95], textColor: 255, fontStyle: 'bold', halign: 'center' },
+   523→          columnStyles: {
+   524→            0: { cellWidth: 25 },
+   525→            1: { cellWidth: 50, halign: 'left' },
+   526→            2: { cellWidth: 35 },
+   527→            3: { cellWidth: 50, halign: 'left' },
+   528→            4: { cellWidth: 35 }
+   529→          },
+   530→          didDrawCell: (data) => {
+   531→            // Draw signature box in signature columns (index 2 and 4)
+   532→            if ((data.column.index === 2 || data.column.index === 4) && data.section === 'body') {
+   533→              const x = data.cell.x + 2;
+   534→              const y = data.cell.y + 2;
+   535→              const w = data.cell.width - 4;
+   536→              const h = data.cell.height - 4;
+   537→              doc.setDrawColor(150);
+   538→              doc.setLineWidth(0.3);
+   539→              doc.rect(x, y, w, h);
+   540→              // Small label under box
+   541→              doc.setFontSize(7);
+   542→              doc.setTextColor(150);
+   543→              doc.text('Signature', data.cell.x + data.cell.width / 2, data.cell.y + data.cell.height - 1, { align: 'center' });
+   544→              doc.setTextColor(0);
+   545→            }
+   546→          },
+   547→          margin: { left: margin, right: margin }
+   548→        });
+   549→
+   550→        // Footer
+   551→        const finalY = (doc as any).lastAutoTable?.finalY || margin + 35 + 20;
+   552→        doc.setFontSize(8);
+   553→        doc.setTextColor(150);
+   554→        doc.text('Exam Supervisor System - Auto Generated', pageW / 2, pageH - 10, { align: 'center' });
+   555→      }
+   556→    }
+   557→
+   558→    if (firstPage) {
+   559→      showToast('No results to export', 'error');
+   560→      return;
+   561→    }
+   562→
+   563→    doc.save('exam_supervision_schedule.pdf');
+   564→    showToast('PDF downloaded!', 'success');
+   565→  };
+   566→
+   567→  // ========== RESET ALL ==========
+   568→  const resetAll = async () => {
+   569→    if (!confirm('Perform dynamic hard reset?')) return;
+   570→    await fetch('/api/distribute', { method: 'DELETE' });
+   571→    loadAll();
+   572→    setResults(null);
+   573→    showToast('All data has been reset', 'info');
+   574→  };
+   575→
+   576→  // ========== RENDER HELPERS ==========
+   577→  const getCell = (grade: string, day: string): ScheduleCell => {
+   578→    return scheduleBuffer[`${grade}__${day}`] || { grade, day, committees: 0, subject: '', time: DEFAULT_TIMES[grade] || '9:00-10:30' };
+   579→  };
+   580→
+   581→  const totalCommittees = Object.values(scheduleBuffer).reduce((a, c) => a + (c.committees || 0), 0);
+   582→  const totalSlots = totalCommittees * 2;
+   583→
+   584→  // ========== LOGIN SCREEN ==========
+   585→  if (view === 'login') {
+   586→    return (
+   587→      <div className="app" style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative', zIndex: 1 }}>
+   588→        <style jsx>{`
+   589→          @keyframes pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.4;transform:scale(1.4)} }
+   590→        `}</style>
+   591→        <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 16, padding: 48, maxWidth: 440, width: '90%', textAlign: 'center' }}>
+   592→          <div style={{ width: 12, height: 12, background: 'var(--accent)', borderRadius: '50%', margin: '0 auto 16px', animation: 'pulse 2s infinite' }} />
+   593→          <h1 style={{ fontFamily: 'var(--mono)', fontSize: 16, color: 'var(--accent)', letterSpacing: 2, marginBottom: 8 }}>EXAM · SUPERVISOR</h1>
+   594→          <p style={{ color: 'var(--text2)', fontSize: 13, marginBottom: 32 }}>Exam Committee Distribution System</p>
+   595→
+   596→          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+   597→            <div>
+   598→              <input
+   599→                type="password"
+   600→                placeholder="User Password"
+   601→                value={password}
+   602→                onChange={e => { setPassword(e.target.value); setLoginError(''); }}
+   603→                onKeyDown={e => e.key === 'Enter' && handleLogin('user')}
+   604→                style={{ padding: '12px 16px', borderRadius: 10, background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text)', fontSize: 14, fontFamily: 'var(--sans)', outline: 'none', textAlign: 'center', width: '100%', marginBottom: 8 }}
+   605→              />
+   606→              <button
+   607→                onClick={() => handleLogin('user')}
+   608→                style={{ padding: '14px 24px', borderRadius: 10, background: 'var(--surface2)', border: '1px solid var(--border)', color: 'var(--text)', fontSize: 15, fontWeight: 600, cursor: 'pointer', fontFamily: 'var(--sans)', transition: 'all 0.2s', width: '100%' }}
+   609→                onMouseOver={e => { (e.target as HTMLElement).style.borderColor = 'var(--accent)'; }}
+   610→                onMouseOut={e => { (e.target as HTMLElement).style.borderColor = 'var(--border)'; }}
+   611→              >
+   612→                👤 Enter as User
+   613→              </button>
+   614→            </div>
+   615→            <div style={{ color: 'var(--text2)', fontSize: 11, margin: '4px 0' }}>────── or ──────</div>
+   616→            <div>
+   617→              <input
+   618→                type="password"
+   619→                placeholder="Admin Password"
+   620→                value={password}
+   621→                onChange={e => { setPassword(e.target.value); setLoginError(''); }}
+   622→                onKeyDown={e => e.key === 'Enter' && handleLogin('admin')}
+   623→                style={{ padding: '12px 16px', borderRadius: 10, background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text)', fontSize: 14, fontFamily: 'var(--sans)', outline: 'none', textAlign: 'center', width: '100%', marginBottom: 8 }}
+   624→              />
+   625→              <button
+   626→                onClick={() => handleLogin('admin')}
+   627→                style={{ padding: '14px 24px', borderRadius: 10, background: 'var(--accent2)', border: 'none', color: '#fff', fontSize: 15, fontWeight: 600, cursor: 'pointer', fontFamily: 'var(--sans)', transition: 'all 0.2s', width: '100%' }}
+   628→                onMouseOver={e => { (e.target as HTMLElement).style.background = '#e55a2b'; }}
+   629→                onMouseOut={e => { (e.target as HTMLElement).style.background = 'var(--accent2)'; }}
+   630→              >
+   631→                🔐 Enter as Admin
+   632→              </button>
+   633→            </div>
+   634→            {loginError && <p style={{ color: 'var(--danger)', fontSize: 12, margin: '-4px 0 0' }}>{loginError}</p>}
+   635→          </div>
+   636→
+   637→          <div style={{ marginTop: 24, fontSize: 11, color: 'var(--text2)' }}>
+   638→            <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: isConnected ? 'var(--success)' : 'var(--danger)', marginRight: 6 }} />
+   639→            {isConnected ? 'Connected' : 'Offline'}
+   640→          </div>
+   641→        </div>
+   642→      </div>
+   643→    );
+   644→  }
+   645→
+   646→  const isAdmin = view === 'admin';
+   647→  const roleLabel = isAdmin ? 'ADMIN' : 'USER';
+   648→  const roleColor = isAdmin ? 'var(--accent2)' : 'var(--accent3)';
+   649→
+   650→  // ========== TEACHERS PAGE ==========
+   651→  const renderTeachersPage = () => (
+   652→    <div className="card">
+   653→      <div className="card-header">
+   654→        <div className="card-title">Teacher Registry</div>
+   655→        {(isAdmin || userCanEditTeachers) && (
+   656→        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+   657→          {isAdmin && <button className="btn btn-demo" onClick={generateDemoTeachers}>🧪 Generate 200 Mock Teachers</button>}
+   658→          {isAdmin && <button className="btn btn-ghost" onClick={importCSV}>📂 Import CSV</button>}
+   659→          <button className="btn btn-primary" onClick={() => { cancelEdit(); setShowAddTeacher(!showAddTeacher); }}>
+   660→            + Add New Teacher
+   661→          </button>
+   662→        </div>
+   663→        )}
+   664→      </div>
+   665→
+   666→      {showAddTeacher && (
+   667→        <div style={{ background: 'var(--surface2)', borderRadius: 10, padding: 20, marginBottom: 20 }}>
+   668→          <div className="grid-3">
+   669→            <div className="form-group">
+   670→              <label className="form-label">Full Name</label>
+   671→              <input className="form-input" value={formName} onChange={e => setFormName(e.target.value)} placeholder="e.g. John Doe" />
+   672→            </div>
+   673→            <div className="form-group">
+   674→              <label className="form-label">Specialist Subject</label>
+   675→              <select className="form-select" value={formSubject} onChange={e => setFormSubject(e.target.value)}>
+   676→                <option value="">-- Choose Subject --</option>
+   677→                {SUBJECTS.map(s => <option key={s} value={s}>{s}</option>)}
+   678→              </select>
+   679→            </div>
+   680→            <div className="form-group">
+   681→              <label className="form-label">Stage Assignment Notes</label>
+   682→              <input className="form-input" value={formNotes} onChange={e => setFormNotes(e.target.value)} placeholder="e.g. prep, sec, primary" />
+   683→            </div>
+   684→          </div>
+   685→          <div style={{ display: 'flex', gap: 10 }}>
+   686→            <button className="btn btn-primary" onClick={saveTeacher}>✓ Save Teacher</button>
+   687→            <button className="btn btn-ghost" onClick={cancelEdit}>Cancel</button>
+   688→          </div>
+   689→        </div>
+   690→      )}
+   691→
+   692→      <div id="teachers-stats" style={{ display: 'flex', gap: 12, marginBottom: 16, flexWrap: 'wrap' }}>
+   693→        <span className="badge badge-green">Total Registered: {teachers.length}</span>
+   694→        {Object.entries(teachers.reduce((acc: Record<string,number>, t) => { acc[t.subject] = (acc[t.subject]||0)+1; return acc; }, {})).map(([s,c]) => (
+   695→          <span key={s} className="badge badge-blue">{s}: {c}</span>
+   696→        ))}
+   697→      </div>
+   698→
+   699→      <div className="table-wrap">
+   700→        <table>
+   701→          <thead>
+   702→            <tr>
+   703→              <th>Index</th><th>Teacher Name</th><th>Subject Badge</th><th>Stage Rules</th>
+   704→              <th>Actions</th>
+   705→            </tr>
+   706→          </thead>
+   707→          <tbody>
+   708→            {teachers.length === 0 ? (
+   709→              <tr><td colSpan={5} style={{ textAlign: 'center', padding: 32 }}>No teachers loaded in registry.</td></tr>
+   710→            ) : teachers.map((t, i) => (
+   711→              <tr key={t.id}>
+   712→                <td>{i + 1}</td>
+   713→                <td style={{ fontWeight: 600, color: 'var(--text)' }}>{t.name}</td>
+   714→                <td><span className="badge badge-blue">{t.subject}</span></td>
+   715→                <td style={{ color: 'var(--accent3)' }}>{t.notes || 'Any Stage'}</td>
+   716→                <td>
+   717→                  <button className="action-btn edit-btn" onClick={() => startEdit(t)}>✏️ Edit</button>
+   718→                  {isAdmin && <button className="action-btn del-btn" onClick={() => deleteTeacher(t.id)}>✕ Remove</button>}
+   719→                </td>
+   720→              </tr>
+   721→            ))}
+   722→          </tbody>
+   723→        </table>
+   724→      </div>
+   725→    </div>
+   726→  );
+   727→
+   728→  // ========== SCHEDULE PAGE ==========
+   729→  const renderSchedulePage = () => (
+   730→    <div className="card">
+   731→      <div className="card-header">
+   732→        <div className="card-title">Exam Structure Blueprint</div>
+   733→        {isAdmin && (
+   734→        <div style={{ display: 'flex', gap: 10 }}>
+   735→          <button className="btn btn-primary" onClick={saveSchedule}>💾 Save Blueprint</button>
+   736→          <button className="btn btn-ghost" onClick={resetSchedule}>↺ Reset Matrix</button>
+   737→        </div>
+   738→        )}
+   739→      </div>
+   740→      <div className="table-wrap" style={{ maxHeight: '70vh', overflow: 'auto' }}>
+   741→        <div className="schedule-grid">
+   742→          <div className="sg-header">Grade Blueprint</div>
+   743→          {DAYS.map(d => <div key={d} className="sg-header">{d}</div>)}
+   744→
+   745→          {GRADES.map(grade => (
+   746→            <React.Fragment key={grade}>
+   747→              <div className="sg-grade">{grade}</div>
+   748→              {DAYS.map(day => {
+   749→                const cell = getCell(grade, day);
+   750→                return (
+   751→                  <div key={day} className="sg-cell">
+   752→                    <input type="number" min="0" placeholder="Comms" value={cell.committees || ''} onChange={e => updateCell(grade, day, 'committees', parseInt(e.target.value) || 0)} readOnly={!isAdmin} style={!isAdmin ? { opacity: 0.7, cursor: 'not-allowed' } : {}} />
+   753→                    <select value={cell.subject || ''} onChange={e => updateCell(grade, day, 'subject', e.target.value)} disabled={!isAdmin} style={!isAdmin ? { opacity: 0.7, cursor: 'not-allowed' } : {}}>
+   754→                      <option value="">Subject</option>
+   755→                      {SUBJECTS.map(s => <option key={s} value={s}>{s}</option>)}
+   756→                    </select>
+   757→                    <input type="text" placeholder="Time Window" value={cell.time || ''} onChange={e => updateCell(grade, day, 'time', e.target.value)} readOnly={!isAdmin} style={!isAdmin ? { opacity: 0.7, cursor: 'not-allowed' } : {}} />
+   758→                  </div>
+   759→                );
+   760→              })}
+   761→            </React.Fragment>
+   762→          ))}
+   763→        </div>
+   764→      </div>
+   765→    </div>
+   766→  );
+   767→
+   768→  // ========== DISTRIBUTE PAGE (Admin Only) ==========
+   769→  const renderDistributePage = () => (
+   770→    <>
+   771→      <div className="grid-4" style={{ marginBottom: 24 }}>
+   772→        <div className="stat-card"><span className="stat-number">{teachers.length}</span><div className="stat-label">Available Pools</div></div>
+   773→        <div className="stat-card"><span className="stat-number">{totalCommittees}</span><div className="stat-label">Active Rooms Matrix</div></div>
+   774→        <div className="stat-card"><span className="stat-number">{totalSlots}</span><div className="stat-label">Total Task Slots</div></div>
+   775→      </div>
+   776→      <div className="card">
+   777→        <div className="card-title" style={{ marginBottom: 16 }}>Mathematical Distribution Engine Constraints</div>
+   778→        <div className="grid-2">
+   779→          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+   780→            <label style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, cursor: 'pointer' }}>
+   781→              <input type="checkbox" id="rule-subject" defaultChecked style={{ width: 16, height: 16, accentColor: 'var(--accent)' }} />
+   782→              Block Specialty Subjects (Never supervise own exam)
+   783→            </label>
+   784→            <label style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, cursor: 'pointer' }}>
+   785→              <input type="checkbox" id="rule-daylimit" defaultChecked style={{ width: 16, height: 16, accentColor: 'var(--accent)' }} />
+   786→              Enforce Hard Cap: **Strictly Max 1 Committee Per Day**
+   787→            </label>
+   788→          </div>
+   789→          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+   790→            <label style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, cursor: 'pointer' }}>
+   791→              <input type="checkbox" id="rule-notes" defaultChecked style={{ width: 16, height: 16, accentColor: 'var(--accent)' }} />
+   792→              Match Stage Preferences Safely with Fallback (Eliminate Standby)
+   793→            </label>
+   794→          </div>
+   795→        </div>
+   796→      </div>
+   797→      <div className="distribute-btn-wrap">
+   798→        <button className="btn btn-orange" onClick={runDistribution}>
+   799→          ⚡ RUN ULTRA ANTI-OVERLAP BALANCER
+   800→        </button>
+   801→      </div>
+   802→    </>
+   803→  );
+   804→
+   805→  // ========== RESULTS PAGE ==========
+   806→  const renderResultsPage = () => {
+   807→    if (!results?.assignments) return <div className="card"><div className="empty-state"><p>Execute the distribution engine to view results</p></div></div>;
+   808→
+   809→    return (
+   810→      <div>
+   811→        <div style={{ marginBottom: 16, display: 'flex', gap: 10 }}>
+   812→          <button className="btn btn-primary" onClick={exportPDF}>📄 Download PDF (A4 Printable)</button>
+   813→        </div>
+   814→        {DAYS.map(day => {
+   815→          const sessions = results.assignments[day] || [];
+   816→          if (sessions.length === 0) return null;
+   817→          return (
+   818→            <div key={day} className="result-day">
+   819→              <div className="result-day-header" onClick={() => {
+   820→                const body = document.getElementById('day-body-' + day);
+   821→                if (body) body.style.display = body.style.display === 'none' ? 'block' : 'none';
+   822→              }}>
+   823→                <div className="result-day-title">📅 Day: {day} </div>
+   824→                <span>View Options ▼</span>
+   825→              </div>
+   826→              <div className="result-day-body" id={'day-body-' + day} style={{ display: 'block' }}>
+   827→                {sessions.map((session, si) => (
+   828→                  <div key={si} className="result-session">
+   829→                    <div className="result-session-header">
+   830→                      <span className="rs-grade">{session.grade}</span>
+   831→                      <span className="rs-time">⏰ Window: {session.time}</span>
+   832→                      <span className="rs-subject">📖 Subject: {session.subject || 'Unassigned'}</span>
+   833→                    </div>
+   834→                    <div className="result-com" style={{ background: 'var(--surface2)', fontSize: 12, fontWeight: 600 }}>
+   835→                      <div className="rc-cell rc-num">Room</div>
+   836→                      <div className="rc-cell">Lead Supervisor</div>
+   837→                      <div className="rc-cell">Associate Supervisor</div>
+   838→                      <div className="rc-cell" style={{ justifyContent: 'center' }}>Daily Load Check</div>
+   839→                    </div>
+   840→                    {session.committees.map((c, ci) => {
+   841→                      const dc1 = c.t1.id ? results.tracking[c.t1.id]?.dayComm[day] : 0;
+   842→                      const dc2 = c.t2.id ? results.tracking[c.t2.id]?.dayComm[day] : 0;
+   843→                      return (
+   844→                        <div key={ci} className="result-com">
+   845→                          <div className="rc-cell rc-num">Room {c.serial}</div>
+   846→                          <div className="rc-cell">{c.t1.name}</div>
+   847→                          <div className="rc-cell">{c.t2.name}</div>
+   848→                          <div className="rc-cell" style={{ justifyContent: 'center', fontFamily: 'var(--mono)', color: 'var(--text2)', fontSize: 11 }}>
+   849→                            {c.t1.id ? dc1 + ' Duty' : '-'} / {c.t2.id ? dc2 + ' Duty' : '-'}
+   850→                          </div>
+   851→                        </div>
+   852→                      );
+   853→                    })}
+   854→                  </div>
+   855→                ))}
+   856→              </div>
+   857→            </div>
+   858→          );
+   859→        })}
+   860→      </div>
+   861→    );
+   862→  };
+   863→
+   864→  // ========== STATS PAGE (Admin Only) ==========
+   865→  const renderStatsPage = () => {
+   866→    if (!results?.tracking || teachers.length === 0) return <div className="card"><div className="empty-state"><p>No analytics to track.</p></div></div>;
+   867→
+   868→    const tr = results.tracking;
+   869→    // Fix double counting
+   870→    teachers.forEach(t => {
+   871→      if (!tr[t.id]) return;
+   872→      const slots = tr[t.id].assignedSlots || [];
+   873→      const seen = new Set<string>();
+   874→      let uniqueHours = 0;
+   875→      slots.forEach(s => {
+   876→        const key = s.day + '_' + s.start + '_' + s.end;
+   877→        if (!seen.has(key)) { seen.add(key); uniqueHours += (s.end - s.start) / 60; }
+   878→      });
+   879→      tr[t.id].totalHours = uniqueHours;
+   880→    });
+   881→
+   882→    let totalComAll = 0, totalHrsAll = 0, over5Count = 0, notUsedCount = 0;
+   883→    teachers.forEach(t => {
+   884→      const tt = tr[t.id] || { totalComm: 0, totalHours: 0 };
+   885→      totalComAll += tt.totalComm || 0;
+   886→      totalHrsAll += tt.totalHours || 0;
+   887→      if ((tt.totalHours || 0) > 5) over5Count++;
+   888→      if ((tt.totalComm || 0) === 0) notUsedCount++;
+   889→    });
+   890→    const maxHrs = Math.max(...teachers.map(t => tr[t.id]?.totalHours || 0));
+   891→    const sorted = [...teachers].sort((a, b) => (tr[b.id]?.totalHours || 0) - (tr[a.id]?.totalHours || 0));
+   892→
+   893→    return (
+   894→      <>
+   895→        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 12, marginBottom: 20 }}>
+   896→          <div className="stat-card"><span className="stat-number">{totalHrsAll.toFixed(1)}</span><div className="stat-label">Total Hours (All)</div></div>
+   897→          <div className="stat-card"><span className="stat-number">{(totalHrsAll / Math.max(teachers.length, 1)).toFixed(1)}</span><div className="stat-label">Avg Hours / Teacher</div></div>
+   898→          <div className="stat-card"><span className="stat-number">{maxHrs.toFixed(1)}</span><div className="stat-label">Max Hours (1 Teacher)</div></div>
+   899→          <div className="stat-card"><span className="stat-number" style={{ color: 'var(--danger)' }}>{over5Count}</span><div className="stat-label">Over 5h ⚠️</div></div>
+   900→          <div className="stat-card"><span className="stat-number" style={{ color: 'var(--warning)' }}>{notUsedCount}</span><div className="stat-label">Not Assigned</div></div>
+   901→        </div>
+   902→        <div className="card">
+   903→          <div className="card-title" style={{ marginBottom: 16 }}>Teacher Hours Summary</div>
+   904→          <div className="table-wrap" style={{ maxHeight: '70vh', overflow: 'auto' }}>
+   905→            <table>
+   906→              <thead>
+   907→                <tr>
+   908→                  <th>#</th><th>Teacher Name</th><th>Subject</th>
+   909→                  {DAYS.map(d => <th key={d}>{d.slice(0, 3)}</th>)}
+   910→                  <th style={{ background: 'rgba(0,212,255,0.1)' }}>Total<br/>Committees</th>
+   911→                  <th style={{ background: 'rgba(0,255,157,0.1)', minWidth: 100 }}>⏱ Total<br/>Hours</th>
+   912→                  <th>Status</th>
+   913→                </tr>
+   914→              </thead>
+   915→              <tbody>
+   916→                {sorted.map((t, i) => {
+   917→                  const tt = tr[t.id] || { totalComm: 0, totalHours: 0, dayComm: {} };
+   918→                  const hrs = tt.totalHours || 0;
+   919→                  const pct = maxHrs > 0 ? Math.round(hrs / maxHrs * 100) : 0;
+   920→                  const hrsColor = hrs > 5 ? 'var(--danger)' : hrs > 3 ? 'var(--accent3)' : hrs > 0 ? 'var(--accent)' : 'var(--text2)';
+   921→                  const status = hrs === 0 ? <span className="badge" style={{ background: 'rgba(255,68,68,0.1)', color: 'var(--danger)' }}>Not Used</span>
+   922→                    : hrs > 5 ? <span className="badge" style={{ background: 'rgba(255,68,68,0.1)', color: 'var(--danger)' }}>Over 5h ⚠️</span>
+   923→                    : <span className="badge" style={{ background: 'rgba(0,255,157,0.1)', color: 'var(--accent3)' }}>OK ✓</span>;
+   924→                  return (
+   925→                    <tr key={t.id}>
+   926→                      <td style={{ color: 'var(--text2)' }}>{i + 1}</td>
+   927→                      <td style={{ fontWeight: 600, color: 'var(--text)' }}>{t.name}</td>
+   928→                      <td><span className="badge badge-blue">{t.subject}</span></td>
+   929→                      {DAYS.map(d => {
+   930→                        const val = tt.dayComm[d] || 0;
+   931→                        return <td key={d} style={{ textAlign: 'center', fontWeight: 600, color: val >= 2 ? 'var(--accent2)' : val === 1 ? 'var(--accent3)' : 'var(--text2)' }}>{val || '-'}</td>;
+   932→                      })}
+   933→                      <td style={{ textAlign: 'center', fontWeight: 700, color: 'var(--accent)', fontFamily: 'var(--mono)' }}>{tt.totalComm}</td>
+   934→                      <td style={{ background: 'rgba(0,255,157,0.03)', padding: '8px 14px' }}>
+   935→                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+   936→                          <span style={{ fontFamily: 'var(--mono)', fontWeight: 700, color: hrsColor, minWidth: 48 }}>{hrs.toFixed(1)}h</span>
+   937→                          <div style={{ flex: 1, height: 6, background: 'var(--border)', borderRadius: 3, overflow: 'hidden' }}>
+   938→                            <div style={{ width: `${pct}%`, height: '100%', background: hrsColor, borderRadius: 3, transition: 'width 0.3s' }} />
+   939→                          </div>
+   940→                        </div>
+   941→                      </td>
+   942→                      <td>{status}</td>
+   943→                    </tr>
+   944→                  );
+   945→                })}
+   946→                <tr style={{ background: 'rgba(0,212,255,0.05)', fontWeight: 700 }}>
+   947→                  <td colSpan={3} style={{ color: 'var(--accent)', fontWeight: 700 }}>TOTAL</td>
+   948→                  {DAYS.map(d => {
+   949→                    const dayTotal = teachers.reduce((a, t) => a + (tr[t.id]?.dayComm[d] || 0), 0);
+   950→                    return <td key={d} style={{ textAlign: 'center', color: 'var(--accent)' }}>{dayTotal}</td>;
+   951→                  })}
+   952→                  <td style={{ textAlign: 'center', color: 'var(--accent)', fontFamily: 'var(--mono)' }}>{totalComAll}</td>
+   953→                  <td style={{ fontFamily: 'var(--mono)', fontWeight: 700, color: 'var(--accent3)', padding: '8px 14px' }}>{totalHrsAll.toFixed(1)}h</td>
+   954→                  <td></td>
+   955→                </tr>
+   956→              </tbody>
+   957→            </table>
+   958→          </div>
+   959→        </div>
+   960→      </>
+   961→    );
+   962→  };
+   963→
+   964→  // ========== MAIN APP RENDER ==========
+   965→  const pages: { key: Page; label: string; adminOnly: boolean }[] = [
+   966→    { key: 'teachers', label: '👨‍🏫 Teachers', adminOnly: false },
+   967→    { key: 'schedule', label: '📅 Schedule', adminOnly: false },
+   968→    { key: 'distribute', label: '⚡ Distribute', adminOnly: true },
+   969→    { key: 'results', label: '📋 Results', adminOnly: false },
+   970→    { key: 'stats', label: '📊 Statistics Load Ledger', adminOnly: true },
+   971→  ];
+   972→
+   973→  const visiblePages = pages.filter(p => !p.adminOnly || isAdmin);
+   974→
+   975→  return (
+   976→    <div className="app">
+   977→      {/* Header */}
+   978→      <header>
+   979→        <div className="logo">
+   980→          <div className="logo-dot" />
+   981→          EXAM · SUPERVISOR · TIME-LOCK · EQUALIZER · v9
+   982→        </div>
+   983→        <div className="header-actions">
+   984→          <span className="badge" style={{ background: `${roleColor}22`, color: roleColor }}>{roleLabel}</span>
+   985→          <span style={{ fontSize: 11, display: 'flex', alignItems: 'center', gap: 4 }}>
+   986→            <span style={{ width: 6, height: 6, borderRadius: '50%', background: isConnected ? 'var(--success)' : 'var(--danger)' }} />
+   987→            {isConnected ? 'Live' : 'Offline'}
+   988→          </span>
+   989→          <button className="btn btn-ghost" onClick={exportCSV}>📥 Export CSV</button>
+   990→          {isAdmin && (
+   991→          <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--text2)' }}>
+   992→            <span>User Edit:</span>
+   993→            <button
+   994→              onClick={() => toggleUserEditPermission(!userCanEditTeachers)}
+   995→              style={{ width: 36, height: 20, borderRadius: 10, border: 'none', cursor: 'pointer', position: 'relative', transition: 'background 0.2s', background: userCanEditTeachers ? 'var(--success)' : 'var(--border)' }}
+   996→            >
+   997→              <div style={{ width: 16, height: 16, borderRadius: '50%', background: '#fff', position: 'absolute', top: 2, left: userCanEditTeachers ? 18 : 2, transition: 'left 0.2s' }} />
+   998→            </button>
+   999→          </div>
+  1000→          )}
+  1001→          {isAdmin && <button className="btn btn-ghost" onClick={resetAll}>🗑 Reset All</button>}
+  1002→          <button className="btn btn-ghost" onClick={handleLogout}>🚪 Logout</button>
+  1003→        </div>
+  1004→      </header>
+  1005→
+  1006→      {/* Nav Tabs */}
+  1007→      <div className="nav-tabs">
+  1008→        {visiblePages.map(p => (
+  1009→          <div
+  1010→            key={p.key}
+  1011→            className={'nav-tab' + (activePage === p.key ? ' active' : '')}
+  1012→            onClick={() => setActivePage(p.key)}
+  1013→          >
+  1014→            {p.label}
+  1015→          </div>
+  1016→        ))}
+  1017→      </div>
+  1018→
+  1019→      {/* Main Content */}
+  1020→      <main className="main">
+  1021→        {loading ? (
+  1022→          <div style={{ textAlign: 'center', padding: 64, color: 'var(--text2)' }}>
+  1023→            <div style={{ width: 24, height: 24, border: '2px solid var(--border)', borderTopColor: 'var(--accent)', borderRadius: '50%', animation: 'spin 0.8s linear infinite', margin: '0 auto 12px' }} />
+  1024→            Loading...
+  1025→          </div>
+  1026→        ) : (
+  1027→          <>
+  1028→            {activePage === 'teachers' && renderTeachersPage()}
+  1029→            {activePage === 'schedule' && renderSchedulePage()}
+  1030→            {activePage === 'distribute' && renderDistributePage()}
+  1031→            {activePage === 'results' && renderResultsPage()}
+  1032→            {activePage === 'stats' && renderStatsPage()}
+  1033→          </>
+  1034→        )}
+  1035→      </main>
+  1036→
+  1037→      {/* Toast */}
+  1038→      <div id="app-toast" className="toast" />
+  1039→    </div>
+  1040→  );
+  1041→}
