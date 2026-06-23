@@ -1,0 +1,28 @@
+{
+  "choices": [
+    {
+      "finish_reason": "stop",
+      "index": 0,
+      "message": {
+        "content": "Here's a comprehensive breakdown of all visual differences between the original and current deployed versions:\n\n### 1. Header & Top Navigation\n- **Original**: Has \"Export CSV\" and \"Reset All\" buttons in the top-right.  \n- **Current**: Replaced with \"USER • Live\" status and \"Logout\" button.  \n- **Original**: Full navigation bar with 5 tabs (Teachers, Schedule, Distribute, Results, Statistics Load Ledger).  \n- **Current**: Reduced to 3 tabs (Teachers, Schedule, Results) with \"Teachers\" highlighted in blue.\n\n### 2. Main Content Area\n- **Original**: \"Teacher Registry\" title with a blue vertical line (|) before it.  \n- **Current**: \"Teacher Registry\" title without the vertical line.  \n- **Original**: Three action buttons: \"Generate 200 Mock Teachers\" (purple), \"Import CSV\" (yellow), \"+ Add New Teacher\" (cyan).  \n- **Current**: Only \"+ Add New Teacher\" button (white text on dark background) remains; other buttons are removed.  \n- **Original**: Table with headers: \"Index\", \"Teacher Name\", \"Subject Badge\", \"Stage Rules\", \"Actions\".  \n- **Current**: Table headers are condensed: \"Index\", \"Teacher Name\", \"Subject Badge\", \"Stage Rules\" (no \"Actions\" column).  \n- **Original**: Empty state text: \"No teachers loaded in registry.\"  \n- **Current**: Table populated with data (1 teacher: \"سارا\" in Teacher Name, \"Math\" in Subject Badge, \"Any Stage\" in Stage Rules).  \n- **Current**: Added summary text: \"Total Registered: 1 Math: 1\".\n\n### 3. Layout & Spacing\n- **Original**: Content is in a rounded, bordered card with padding.  \n- **Current**: No card border; content is directly on the dark background.  \n- **Original**: Table has distinct header row with dark background.  \n- **Current**: Table headers are plain text without a separate background row.  \n- **Original**: Buttons are spaced evenly with distinct colors.  \n- **Current**: Single button is left-aligned with minimal styling.\n\n### 4. Colors & Styling\n- **Original**: Dark blue card background with light blue text for headers.  \n- **Current**: No card background; text uses white/light colors directly on the dark theme.  \n- **Original**: Purple, yellow, and cyan buttons with icons.  \n- **Current**: White text button with no icon or color.  \n- **Current**: \"Any Stage\" text is highlighted in green (not present in original).\n\n### 5. Font & Text\n- **Original**: Standard table headers with clear spacing.  \n- **Current**: Condensed table headers (e.g., \"Teacher Name\" vs. \"Teacher Name\" in original).  \n- **Original**: Empty state message.  \n- **Current**: Data rows with actual teacher information.\n\n### 6. Overall Polish\n- **Original**: Polished UI with consistent button styling, card design, and full navigation.  \n- **Current**: Simplified design with reduced navigation, removed buttons, and a more minimal aesthetic.  \n\n### Summary of Key Changes:\n- Navigation reduced from 5 to 3 tabs.  \n- Top-right buttons replaced with user status/logout.  \n- Action buttons reduced from 3 to 1.  \n- Card border removed.  \n- Table populated with data (vs. empty state).  \n- Summary text added.  \n- Color scheme simplified (no purple/yellow/cyan buttons).  \n- Header styling condensed.",
+        "role": "assistant"
+      }
+    }
+  ],
+  "created": 1782173569,
+  "id": "2026062308123553bf5f83f6bb4100",
+  "model": "glm-4.6v",
+  "object": "chat.completion",
+  "request_id": "2026062308123553bf5f83f6bb4100",
+  "usage": {
+    "completion_tokens": 742,
+    "completion_tokens_details": {
+      "reasoning_tokens": 0
+    },
+    "prompt_tokens": 2013,
+    "prompt_tokens_details": {
+      "cached_tokens": 4
+    },
+    "total_tokens": 2755
+  }
+}

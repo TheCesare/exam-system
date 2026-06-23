@@ -522,17 +522,15 @@ export default function ExamSystem() {
     <div className="card">
       <div className="card-header">
         <div className="card-title">Teacher Registry</div>
+        {isAdmin && (
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-          {isAdmin && (
-            <>
-              <button className="btn btn-demo" onClick={generateDemoTeachers}>🧪 Generate 200 Mock Teachers</button>
-              <button className="btn btn-ghost" onClick={importCSV}>📂 Import CSV</button>
-            </>
-          )}
+          <button className="btn btn-demo" onClick={generateDemoTeachers}>🧪 Generate 200 Mock Teachers</button>
+          <button className="btn btn-ghost" onClick={importCSV}>📂 Import CSV</button>
           <button className="btn btn-primary" onClick={() => { cancelEdit(); setShowAddTeacher(!showAddTeacher); }}>
             + Add New Teacher
           </button>
         </div>
+        )}
       </div>
 
       {showAddTeacher && (
@@ -578,18 +576,18 @@ export default function ExamSystem() {
           </thead>
           <tbody>
             {teachers.length === 0 ? (
-              <tr><td colSpan={isAdmin ? 5 : 4} style={{ textAlign: 'center', padding: 32 }}>No teachers registered</td></tr>
+              <tr><td colSpan={isAdmin ? 5 : 4} style={{ textAlign: 'center', padding: 32 }}>No teachers loaded in registry.</td></tr>
             ) : teachers.map((t, i) => (
               <tr key={t.id}>
                 <td>{i + 1}</td>
-                <td style={{ fontWeight: 600, color: '#fff' }}>{t.name}</td>
+                <td style={{ fontWeight: 600, color: 'var(--text)' }}>{t.name}</td>
                 <td><span className="badge badge-blue">{t.subject}</span></td>
                 <td style={{ color: 'var(--accent3)' }}>{t.notes || 'Any Stage'}</td>
                 {isAdmin && (
-                  <td>
-                    <button className="action-btn edit-btn" onClick={() => startEdit(t)}>✏️ Edit</button>
-                    <button className="action-btn del-btn" onClick={() => deleteTeacher(t.id)}>✕ Remove</button>
-                  </td>
+                <td>
+                  <button className="action-btn edit-btn" onClick={() => startEdit(t)}>✏️ Edit</button>
+                  <button className="action-btn del-btn" onClick={() => deleteTeacher(t.id)}>✕ Remove</button>
+                </td>
                 )}
               </tr>
             ))}
@@ -655,20 +653,20 @@ export default function ExamSystem() {
             </label>
             <label style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, cursor: 'pointer' }}>
               <input type="checkbox" id="rule-daylimit" defaultChecked style={{ width: 16, height: 16, accentColor: 'var(--accent)' }} />
-              Enforce Hard Cap: Strictly Max 1 Committee Per Day
+              Enforce Hard Cap: **Strictly Max 1 Committee Per Day**
             </label>
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
             <label style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, cursor: 'pointer' }}>
               <input type="checkbox" id="rule-notes" defaultChecked style={{ width: 16, height: 16, accentColor: 'var(--accent)' }} />
-              Apply Stage Preference Matching (notes field)
+              Match Stage Preferences Safely with Fallback (Eliminate Standby)
             </label>
           </div>
         </div>
       </div>
       <div className="distribute-btn-wrap">
         <button className="btn btn-orange" onClick={runDistribution}>
-          ⚡ Execute Time-Lock Equalizer Distribution
+          ⚡ RUN ULTRA ANTI-OVERLAP BALANCER
         </button>
       </div>
     </>
@@ -793,7 +791,7 @@ export default function ExamSystem() {
                   return (
                     <tr key={t.id}>
                       <td style={{ color: 'var(--text2)' }}>{i + 1}</td>
-                      <td style={{ fontWeight: 600, color: '#fff' }}>{t.name}</td>
+                      <td style={{ fontWeight: 600, color: 'var(--text)' }}>{t.name}</td>
                       <td><span className="badge badge-blue">{t.subject}</span></td>
                       {DAYS.map(d => {
                         const val = tt.dayComm[d] || 0;
@@ -834,9 +832,9 @@ export default function ExamSystem() {
   const pages: { key: Page; label: string; adminOnly: boolean }[] = [
     { key: 'teachers', label: '👨‍🏫 Teachers', adminOnly: false },
     { key: 'schedule', label: '📅 Schedule', adminOnly: false },
-    { key: 'distribute', label: '⚡ Distribute', adminOnly: true },
+    { key: 'distribute', label: '⚡ Distribute', adminOnly: false },
     { key: 'results', label: '📋 Results', adminOnly: false },
-    { key: 'stats', label: '📊 Statistics Load Ledger', adminOnly: true },
+    { key: 'stats', label: '📊 Statistics Load Ledger', adminOnly: false },
   ];
 
   const visiblePages = pages.filter(p => !p.adminOnly || isAdmin);
@@ -855,12 +853,8 @@ export default function ExamSystem() {
             <span style={{ width: 6, height: 6, borderRadius: '50%', background: isConnected ? 'var(--success)' : 'var(--danger)' }} />
             {isConnected ? 'Live' : 'Offline'}
           </span>
-          {isAdmin && (
-            <button className="btn btn-ghost" onClick={exportCSV}>📥 Export CSV</button>
-          )}
-          {isAdmin && (
-            <button className="btn btn-ghost" onClick={resetAll}>🗑 Reset All</button>
-          )}
+          <button className="btn btn-ghost" onClick={exportCSV}>📥 Export CSV</button>
+          <button className="btn btn-ghost" onClick={resetAll}>🗑 Reset All</button>
           <button className="btn btn-ghost" onClick={handleLogout}>🚪 Logout</button>
         </div>
       </header>
@@ -889,172 +883,15 @@ export default function ExamSystem() {
           <>
             {activePage === 'teachers' && renderTeachersPage()}
             {activePage === 'schedule' && renderSchedulePage()}
-            {activePage === 'distribute' && isAdmin && renderDistributePage()}
+            {activePage === 'distribute' && renderDistributePage()}
             {activePage === 'results' && renderResultsPage()}
-            {activePage === 'stats' && isAdmin && renderStatsPage()}
+            {activePage === 'stats' && renderStatsPage()}
           </>
         )}
       </main>
 
       {/* Toast */}
       <div id="app-toast" className="toast" />
-
-      <style jsx>{`
-        @keyframes pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.4;transform:scale(1.4)} }
-        @keyframes spin { to { transform: rotate(360deg); } }
-
-        .app { position: relative; z-index: 1; }
-
-        header {
-          background: linear-gradient(135deg, #0d1b2e 0%, #0a1628 100%);
-          border-bottom: 1px solid var(--border);
-          padding: 0 32px;
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          height: 64px;
-          position: sticky;
-          top: 0;
-          z-index: 100;
-          backdrop-filter: blur(20px);
-        }
-
-        .logo {
-          display: flex;
-          align-items: center;
-          gap: 12px;
-          font-family: var(--mono);
-          font-size: 14px;
-          color: var(--accent);
-          letter-spacing: 2px;
-          text-transform: uppercase;
-        }
-
-        .logo-dot {
-          width: 8px;
-          height: 8px;
-          background: var(--accent);
-          border-radius: 50%;
-          animation: pulse 2s infinite;
-        }
-
-        .header-actions { display: flex; gap: 12px; align-items: center; }
-
-        .nav-tabs {
-          display: flex;
-          gap: 0;
-          background: var(--surface);
-          border-bottom: 1px solid var(--border);
-          padding: 0 32px;
-          overflow-x: auto;
-        }
-
-        .nav-tab {
-          padding: 14px 24px;
-          font-size: 13px;
-          font-weight: 500;
-          color: var(--text2);
-          cursor: pointer;
-          border-bottom: 2px solid transparent;
-          transition: all 0.2s;
-          white-space: nowrap;
-          user-select: none;
-        }
-
-        .nav-tab:hover { color: var(--text); }
-        .nav-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
-
-        .main { padding: 28px 32px; max-width: 1400px; margin: 0 auto; }
-
-        .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 24px; margin-bottom: 20px; }
-        .card-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; flex-wrap: wrap; gap: 12px; }
-        .card-title { font-size: 15px; font-weight: 600; color: var(--text); display: flex; align-items: center; gap: 10px; }
-        .card-title::before { content:''; width: 3px; height: 18px; background: var(--accent); border-radius: 2px; }
-
-        .btn { display: inline-flex; align-items: center; gap: 8px; padding: 9px 18px; border-radius: 8px; font-size: 13px; font-weight: 500; cursor: pointer; border: none; transition: all 0.2s; font-family: var(--sans); }
-        .btn-primary { background: var(--accent); color: #000; }
-        .btn-primary:hover { background: #00b8d9; transform:translateY(-1px); }
-        .btn-demo { background: #8a2be2; color: #fff; border: 1px solid rgba(255,255,255,0.1); }
-        .btn-demo:hover { background: #9932cc; transform:translateY(-1px); }
-        .btn-ghost { background: transparent; color: var(--text2); border: 1px solid var(--border); }
-        .btn-ghost:hover { color:var(--text); border-color: var(--accent); }
-        .btn-orange { background: var(--accent2); color: #fff; padding: 12px 32px; font-size: 15px; font-weight: 600; }
-        .btn-orange:hover { background: #e55a2b; transform:translateY(-2px); box-shadow: 0 8px 24px rgba(255,107,53,0.3); }
-
-        .table-wrap { overflow-x: auto; }
-        table { width: 100%; border-collapse: collapse; font-size: 13px; }
-        thead th { background: var(--surface2); padding: 10px 14px; text-align: left; font-weight: 600; color: var(--text2); font-size: 12px; border-bottom: 1px solid var(--border); white-space: nowrap; }
-        tbody tr { border-bottom: 1px solid rgba(30,58,95,0.5); transition: background 0.15s; }
-        tbody tr:hover { background: rgba(0,212,255,0.03); }
-        tbody td { padding: 10px 14px; color: var(--text); vertical-align: middle; }
-
-        .form-group { margin-bottom: 16px; }
-        .form-label { display: block; font-size: 12px; font-weight: 500; color: var(--text2); margin-bottom: 6px; }
-        .form-input, .form-select { width: 100%; padding: 9px 13px; background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; color: var(--text); font-size: 13px; font-family: var(--sans); }
-
-        .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-        .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; }
-        .grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
-
-        .stat-card { background: var(--surface2); border: 1px solid var(--border); border-radius: 10px; padding: 20px; text-align: center; }
-        .stat-number { font-family: var(--mono); font-size: 28px; font-weight: 600; color: var(--accent); display: block; }
-        .stat-label { font-size: 12px; color: var(--text2); margin-top: 4px; }
-
-        .badge { display: inline-block; padding: 3px 10px; border-radius: 20px; font-size: 11px; font-weight: 600; }
-        .badge-blue { background:rgba(0,212,255,0.15); color:var(--accent); }
-        .badge-orange { background:rgba(255,107,53,0.15); color:var(--accent2); }
-        .badge-green { background:rgba(0,255,157,0.15); color:var(--accent3); }
-        .badge-red { background:rgba(255,68,68,0.15); color:var(--danger); }
-
-        .action-btn { background: none; border: none; cursor: pointer; font-size: 14px; padding: 4px 8px; border-radius: 4px; }
-        .del-btn { color: var(--danger); }
-        .edit-btn { color: var(--accent); margin-right: 6px; }
-
-        .schedule-grid { display: grid; grid-template-columns: 160px repeat(6, 1fr); gap: 4px; font-size: 12px; }
-        .sg-header { background: var(--surface2); padding: 10px 8px; text-align: center; font-weight: 600; color: var(--accent); border-radius: 6px; }
-        .sg-grade { background: var(--surface2); padding: 10px 12px; font-weight: 500; border-radius: 6px; display: flex; align-items: center; }
-        .sg-cell { background: var(--surface2); border-radius: 6px; padding: 6px; display: flex; flex-direction: column; gap: 4px; }
-        .sg-cell input[type="number"] { width: 100%; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; color: var(--text); font-size: 12px; padding: 4px 6px; text-align: center; font-family: var(--sans); }
-        .sg-cell select, .sg-cell input[type="text"] { width: 100%; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; color: var(--text); font-size: 11px; padding: 4px 6px; font-family: var(--sans); }
-
-        .result-day { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; margin-bottom: 16px; overflow: hidden; }
-        .result-day-header { background: var(--surface2); padding: 14px 20px; display: flex; align-items: center; justify-content: space-between; cursor: pointer; }
-        .result-day-title { font-weight: 600; font-size: 14px; color: var(--accent); display: flex; align-items: center; gap: 10px; }
-        .result-day-body { padding: 16px 20px; }
-
-        .result-session { margin-bottom: 16px; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
-        .result-session-header { background: rgba(0,212,255,0.05); padding: 10px 16px; display: flex; gap: 20px; align-items: center; font-size: 12px; }
-        .rs-grade { font-weight: 600; color: var(--text); }
-        .rs-time { color: var(--accent); font-family: var(--mono); }
-        .rs-subject { color: var(--accent2); }
-
-        .result-com { display: grid; grid-template-columns: 60px 1fr 1fr 100px; gap: 0; font-size: 12px; }
-        .rc-cell { padding: 8px 12px; border-bottom: 1px solid rgba(30,58,95,0.4); display: flex; align-items: center; }
-        .rc-num { color: var(--text2); font-family: var(--mono); justify-content: center; }
-        .rc-double { background: rgba(255,107,53,0.1); color: var(--accent2); font-weight: 600; }
-
-        .distribute-btn-wrap { text-align: center; padding: 32px; }
-        .empty-state { text-align: center; padding: 48px; color: var(--text2); }
-
-        .toast { position: fixed; bottom: 28px; left: 50%; transform: translateX(-50%) translateY(100px); background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 14px 24px; font-size: 14px; z-index: 999; transition: transform 0.3s ease; min-width: 300px; text-align: center; }
-        .toast.show { transform: translateX(-50%) translateY(0); }
-        .toast.success { border-color: var(--success); color: var(--success); }
-        .toast.error { border-color: var(--danger); color: var(--danger); }
-
-        ::-webkit-scrollbar { width: 6px; height: 6px; }
-        ::-webkit-scrollbar-track { background: var(--bg); }
-        ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
-
-        @media (max-width: 768px) {
-          header { padding: 0 16px; }
-          .main { padding: 16px; }
-          .nav-tabs { padding: 0 16px; }
-          .grid-3, .grid-4 { grid-template-columns: 1fr; }
-          .grid-2 { grid-template-columns: 1fr; }
-          .schedule-grid { grid-template-columns: 120px repeat(6, minmax(80px, 1fr)); }
-          .result-com { grid-template-columns: 50px 1fr 1fr 80px; font-size: 11px; }
-        }
-      `}</style>
     </div>
   );
 }
