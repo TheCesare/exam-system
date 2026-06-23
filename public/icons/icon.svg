@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0a0e1a"/>
+      <stop offset="100%" style="stop-color:#111827"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#00d4ff"/>
+      <stop offset="100%" style="stop-color:#00ff9d"/>
+    </linearGradient>
+  </defs>
+  <!-- Background rounded rect -->
+  <rect width="512" height="512" rx="96" fill="url(#bg)"/>
+  <rect x="2" y="2" width="508" height="508" rx="94" fill="none" stroke="#1e3a5f" stroke-width="3"/>
+  <!-- Clipboard body -->
+  <rect x="120" y="100" width="272" height="320" rx="16" fill="#1a2235" stroke="#1e3a5f" stroke-width="3"/>
+  <!-- Clipboard clip -->
+  <rect x="196" y="80" width="120" height="48" rx="12" fill="#1e3a5f"/>
+  <rect x="216" y="88" width="80" height="32" rx="8" fill="#0a0e1a"/>
+  <!-- Lines on clipboard (exam paper lines) -->
+  <line x1="152" y1="180" x2="360" y2="180" stroke="#00d4ff" stroke-width="3" stroke-linecap="round" opacity="0.8"/>
+  <line x1="152" y1="220" x2="320" y2="220" stroke="#00d4ff" stroke-width="2" stroke-linecap="round" opacity="0.4"/>
+  <line x1="152" y1="252" x2="340" y2="252" stroke="#00d4ff" stroke-width="2" stroke-linecap="round" opacity="0.4"/>
+  <line x1="152" y1="284" x2="300" y2="284" stroke="#00d4ff" stroke-width="2" stroke-linecap="round" opacity="0.4"/>
+  <!-- Checkmark circle -->
+  <circle cx="256" cy="360" r="40" fill="url(#accent)" opacity="0.15"/>
+  <circle cx="256" cy="360" r="32" fill="none" stroke="url(#accent)" stroke-width="3"/>
+  <polyline points="238,360 250,374 276,346" fill="none" stroke="#00ff9d" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- Pulse dot -->
+  <circle cx="400" cy="120" r="10" fill="#00d4ff" opacity="0.9"/>
+  <circle cx="400" cy="120" r="16" fill="none" stroke="#00d4ff" stroke-width="1.5" opacity="0.4"/>
+</svg>
