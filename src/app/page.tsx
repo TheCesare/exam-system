@@ -221,6 +221,7 @@ export default function ExamSystem() {
   };
 
   const deleteTeacher = async (id: string) => {
+    if (!isAdmin) { showToast('Admin only - التعديل والحذف للادمن فقط', 'error'); return; }
     if (!confirm('Delete this teacher?')) return;
     try {
       await fetch(`/api/teachers?id=${id}`, { method: 'DELETE' });
@@ -230,6 +231,7 @@ export default function ExamSystem() {
   };
 
   const startEdit = (t: Teacher) => {
+    if (!isAdmin) { showToast('Admin only - التعديل والحذف للادمن فقط', 'error'); return; }
     setEditTeacherId(t.id);
     setFormName(t.name);
     setFormSubject(t.subject);
@@ -571,24 +573,22 @@ export default function ExamSystem() {
           <thead>
             <tr>
               <th>Index</th><th>Teacher Name</th><th>Subject Badge</th><th>Stage Rules</th>
-              {isAdmin && <th>Actions</th>}
+              <th>Actions</th>
             </tr>
           </thead>
           <tbody>
             {teachers.length === 0 ? (
-              <tr><td colSpan={isAdmin ? 5 : 4} style={{ textAlign: 'center', padding: 32 }}>No teachers loaded in registry.</td></tr>
+              <tr><td colSpan={5} style={{ textAlign: 'center', padding: 32 }}>No teachers loaded in registry.</td></tr>
             ) : teachers.map((t, i) => (
               <tr key={t.id}>
                 <td>{i + 1}</td>
                 <td style={{ fontWeight: 600, color: 'var(--text)' }}>{t.name}</td>
                 <td><span className="badge badge-blue">{t.subject}</span></td>
                 <td style={{ color: 'var(--accent3)' }}>{t.notes || 'Any Stage'}</td>
-                {isAdmin && (
                 <td>
                   <button className="action-btn edit-btn" onClick={() => startEdit(t)}>✏️ Edit</button>
                   <button className="action-btn del-btn" onClick={() => deleteTeacher(t.id)}>✕ Remove</button>
                 </td>
-                )}
               </tr>
             ))}
           </tbody>
