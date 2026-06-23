@@ -68,6 +68,7 @@ export default function ExamSystem() {
   const [password, setPassword] = useState('');
   const [loginError, setLoginError] = useState('');
   const [isConnected, setIsConnected] = useState(true);
+  const [userCanEditTeachers, setUserCanEditTeachers] = useState(false);
 
   // Data state
   const [teachers, setTeachers] = useState<Teacher[]>([]);
@@ -163,26 +164,45 @@ export default function ExamSystem() {
     };
   }, [loadTeachers, loadSchedule, loadResults]);
 
+  // ========== LOAD SETTINGS ==========
+  const loadSettings = useCallback(async () => {
+    try {
+      const res = await fetch('/api/settings');
+      if (res.ok) {
+        const data = await res.json();
+        setUserCanEditTeachers(!!data.user_can_edit_teachers);
+      }
+    } catch { /* silent */ }
+  }, []);
+
+  const toggleUserEditPermission = async (val: boolean) => {
+    try {
+      await fetch('/api/settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user_can_edit_teachers: val })
+      });
+      setUserCanEditTeachers(val);
+      showToast(val ? 'User edit permission enabled' : 'User edit permission disabled', 'info');
+    } catch { showToast('Error updating settings', 'error'); }
+  };
+
   // ========== AUTH ==========
   const handleLogin = async (role: 'user' | 'admin') => {
-    if (role === 'user') {
-      setView('user');
-      loadAll();
-      return;
-    }
-    if (!password.trim()) { setLoginError('Enter the admin password'); return; }
+    if (!password.trim()) { setLoginError('ادخل كلمة السر'); return; }
     try {
       const res = await fetch('/api/auth', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ password })
+        body: JSON.stringify({ password, role })
       });
       const data = await res.json();
       if (data.success) {
-        setView('admin');
+        setView(data.role);
         loadAll();
+        loadSettings();
       } else {
-        setLoginError(data.message || 'Incorrect password');
+        setLoginError(data.message || 'كلمة السر غلط');
       }
     } catch { setLoginError('Connection error'); }
   };
@@ -194,11 +214,47 @@ export default function ExamSystem() {
     setTeachers([]);
     setSchedule([]);
     setResults(null);
+    setUserCanEditTeachers(false);
   };
 
   // ========== TEACHER ACTIONS ==========
+
+  const deleteTeacher = async (id: string) => {
+    if (!isAdmin) { showToast('الحذف للادمن فقط', 'error'); return; }
+    if (!confirm('Delete this teacher?')) return;
+    try {
+      await fetch(`/api/teachers?id=${id}`, { method: 'DELETE' });
+      loadTeachers();
+      showToast('Teacher deleted', 'success');
+    } catch { showToast('Error deleting', 'error'); }
+  };
+
+  const startEdit = (t: Teacher) => {
+    if (!isAdmin && !userCanEditTeachers) { showToast('مفيش صلاحية تعديل - اسأل الادمن', 'error'); return; }
+    setEditTeacherId(t.id);
+    setFormName(t.name);
+    setFormSubject(t.subject);
+    setFormNotes(t.notes);
+    setShowAddTeacher(true);
+  };
+
   const saveTeacher = async () => {
     if (!formName.trim() || !formSubject) { showToast('Please complete all fields', 'error'); return; }
+    // User can only edit name and subject (not add new or change notes)
+    if (!isAdmin) {
+      if (!editTeacherId) { showToast('الاضافة للادمن فقط', 'error'); return; }
+      try {
+        await fetch('/api/teachers', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: editTeacherId, name: formName.trim(), subject: formSubject, notes: formNotes })
+        });
+        showToast('Teacher updated', 'success');
+        cancelEdit();
+        loadTeachers();
+      } catch { showToast('Error saving teacher', 'error'); }
+      return;
+    }
     try {
       if (editTeacherId) {
         await fetch('/api/teachers', {
@@ -218,25 +274,6 @@ export default function ExamSystem() {
       cancelEdit();
       loadTeachers();
     } catch { showToast('Error saving teacher', 'error'); }
-  };
-
-  const deleteTeacher = async (id: string) => {
-    if (!isAdmin) { showToast('Admin only - التعديل والحذف للادمن فقط', 'error'); return; }
-    if (!confirm('Delete this teacher?')) return;
-    try {
-      await fetch(`/api/teachers?id=${id}`, { method: 'DELETE' });
-      loadTeachers();
-      showToast('Teacher deleted', 'success');
-    } catch { showToast('Error deleting', 'error'); }
-  };
-
-  const startEdit = (t: Teacher) => {
-    if (!isAdmin) { showToast('Admin only - التعديل والحذف للادمن فقط', 'error'); return; }
-    setEditTeacherId(t.id);
-    setFormName(t.name);
-    setFormSubject(t.subject);
-    setFormNotes(t.notes);
-    setShowAddTeacher(true);
   };
 
   const cancelEdit = () => {
@@ -477,33 +514,44 @@ export default function ExamSystem() {
           <p style={{ color: 'var(--text2)', fontSize: 13, marginBottom: 32 }}>Exam Committee Distribution System</p>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-            <button
-              onClick={() => handleLogin('user')}
-              style={{ padding: '14px 24px', borderRadius: 10, background: 'var(--surface2)', border: '1px solid var(--border)', color: 'var(--text)', fontSize: 15, fontWeight: 600, cursor: 'pointer', fontFamily: 'var(--sans)', transition: 'all 0.2s' }}
-              onMouseOver={e => { (e.target as HTMLElement).style.borderColor = 'var(--accent)'; }}
-              onMouseOut={e => { (e.target as HTMLElement).style.borderColor = 'var(--border)'; }}
-            >
-              👤 Enter as User
-            </button>
+            <div>
+              <input
+                type="password"
+                placeholder="User Password"
+                value={password}
+                onChange={e => { setPassword(e.target.value); setLoginError(''); }}
+                onKeyDown={e => e.key === 'Enter' && handleLogin('user')}
+                style={{ padding: '12px 16px', borderRadius: 10, background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text)', fontSize: 14, fontFamily: 'var(--sans)', outline: 'none', textAlign: 'center', width: '100%', marginBottom: 8 }}
+              />
+              <button
+                onClick={() => handleLogin('user')}
+                style={{ padding: '14px 24px', borderRadius: 10, background: 'var(--surface2)', border: '1px solid var(--border)', color: 'var(--text)', fontSize: 15, fontWeight: 600, cursor: 'pointer', fontFamily: 'var(--sans)', transition: 'all 0.2s', width: '100%' }}
+                onMouseOver={e => { (e.target as HTMLElement).style.borderColor = 'var(--accent)'; }}
+                onMouseOut={e => { (e.target as HTMLElement).style.borderColor = 'var(--border)'; }}
+              >
+                👤 Enter as User
+              </button>
+            </div>
             <div style={{ color: 'var(--text2)', fontSize: 11, margin: '4px 0' }}>────── or ──────</div>
-
-            <input
-              type="password"
-              placeholder="Admin Password"
-              value={password}
-              onChange={e => { setPassword(e.target.value); setLoginError(''); }}
-              onKeyDown={e => e.key === 'Enter' && handleLogin('admin')}
-              style={{ padding: '12px 16px', borderRadius: 10, background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text)', fontSize: 14, fontFamily: 'var(--sans)', outline: 'none', textAlign: 'center' }}
-            />
+            <div>
+              <input
+                type="password"
+                placeholder="Admin Password"
+                value={password}
+                onChange={e => { setPassword(e.target.value); setLoginError(''); }}
+                onKeyDown={e => e.key === 'Enter' && handleLogin('admin')}
+                style={{ padding: '12px 16px', borderRadius: 10, background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text)', fontSize: 14, fontFamily: 'var(--sans)', outline: 'none', textAlign: 'center', width: '100%', marginBottom: 8 }}
+              />
+              <button
+                onClick={() => handleLogin('admin')}
+                style={{ padding: '14px 24px', borderRadius: 10, background: 'var(--accent2)', border: 'none', color: '#fff', fontSize: 15, fontWeight: 600, cursor: 'pointer', fontFamily: 'var(--sans)', transition: 'all 0.2s', width: '100%' }}
+                onMouseOver={e => { (e.target as HTMLElement).style.background = '#e55a2b'; }}
+                onMouseOut={e => { (e.target as HTMLElement).style.background = 'var(--accent2)'; }}
+              >
+                🔐 Enter as Admin
+              </button>
+            </div>
             {loginError && <p style={{ color: 'var(--danger)', fontSize: 12, margin: '-4px 0 0' }}>{loginError}</p>}
-            <button
-              onClick={() => handleLogin('admin')}
-              style={{ padding: '14px 24px', borderRadius: 10, background: 'var(--accent2)', border: 'none', color: '#fff', fontSize: 15, fontWeight: 600, cursor: 'pointer', fontFamily: 'var(--sans)', transition: 'all 0.2s' }}
-              onMouseOver={e => { (e.target as HTMLElement).style.background = '#e55a2b'; }}
-              onMouseOut={e => { (e.target as HTMLElement).style.background = 'var(--accent2)'; }}
-            >
-              🔐 Enter as Admin
-            </button>
           </div>
 
           <div style={{ marginTop: 24, fontSize: 11, color: 'var(--text2)' }}>
@@ -537,7 +585,7 @@ export default function ExamSystem() {
 
       {showAddTeacher && (
         <div style={{ background: 'var(--surface2)', borderRadius: 10, padding: 20, marginBottom: 20 }}>
-          <div className="grid-3">
+          <div className={isAdmin ? 'grid-3' : 'grid-2'}>
             <div className="form-group">
               <label className="form-label">Full Name</label>
               <input className="form-input" value={formName} onChange={e => setFormName(e.target.value)} placeholder="e.g. John Doe" />
@@ -549,10 +597,12 @@ export default function ExamSystem() {
                 {SUBJECTS.map(s => <option key={s} value={s}>{s}</option>)}
               </select>
             </div>
+            {isAdmin && (
             <div className="form-group">
               <label className="form-label">Stage Assignment Notes</label>
               <input className="form-input" value={formNotes} onChange={e => setFormNotes(e.target.value)} placeholder="e.g. prep, sec, primary" />
             </div>
+            )}
           </div>
           <div style={{ display: 'flex', gap: 10 }}>
             <button className="btn btn-primary" onClick={saveTeacher}>✓ Save Teacher</button>
@@ -587,7 +637,7 @@ export default function ExamSystem() {
                 <td style={{ color: 'var(--accent3)' }}>{t.notes || 'Any Stage'}</td>
                 <td>
                   <button className="action-btn edit-btn" onClick={() => startEdit(t)}>✏️ Edit</button>
-                  <button className="action-btn del-btn" onClick={() => deleteTeacher(t.id)}>✕ Remove</button>
+                  {isAdmin && <button className="action-btn del-btn" onClick={() => deleteTeacher(t.id)}>✕ Remove</button>}
                 </td>
               </tr>
             ))}
@@ -602,10 +652,12 @@ export default function ExamSystem() {
     <div className="card">
       <div className="card-header">
         <div className="card-title">Exam Structure Blueprint</div>
+        {isAdmin && (
         <div style={{ display: 'flex', gap: 10 }}>
           <button className="btn btn-primary" onClick={saveSchedule}>💾 Save Blueprint</button>
           <button className="btn btn-ghost" onClick={resetSchedule}>↺ Reset Matrix</button>
         </div>
+        )}
       </div>
       <div className="table-wrap" style={{ maxHeight: '70vh', overflow: 'auto' }}>
         <div className="schedule-grid">
@@ -619,12 +671,12 @@ export default function ExamSystem() {
                 const cell = getCell(grade, day);
                 return (
                   <div key={day} className="sg-cell">
-                    <input type="number" min="0" placeholder="Comms" value={cell.committees || ''} onChange={e => updateCell(grade, day, 'committees', parseInt(e.target.value) || 0)} />
-                    <select value={cell.subject || ''} onChange={e => updateCell(grade, day, 'subject', e.target.value)}>
+                    <input type="number" min="0" placeholder="Comms" value={cell.committees || ''} onChange={e => updateCell(grade, day, 'committees', parseInt(e.target.value) || 0)} readOnly={!isAdmin} style={!isAdmin ? { opacity: 0.7, cursor: 'not-allowed' } : {}} />
+                    <select value={cell.subject || ''} onChange={e => updateCell(grade, day, 'subject', e.target.value)} disabled={!isAdmin} style={!isAdmin ? { opacity: 0.7, cursor: 'not-allowed' } : {}}>
                       <option value="">Subject</option>
                       {SUBJECTS.map(s => <option key={s} value={s}>{s}</option>)}
                     </select>
-                    <input type="text" placeholder="Time Window" value={cell.time || ''} onChange={e => updateCell(grade, day, 'time', e.target.value)} />
+                    <input type="text" placeholder="Time Window" value={cell.time || ''} onChange={e => updateCell(grade, day, 'time', e.target.value)} readOnly={!isAdmin} style={!isAdmin ? { opacity: 0.7, cursor: 'not-allowed' } : {}} />
                   </div>
                 );
               })}
@@ -832,9 +884,9 @@ export default function ExamSystem() {
   const pages: { key: Page; label: string; adminOnly: boolean }[] = [
     { key: 'teachers', label: '👨‍🏫 Teachers', adminOnly: false },
     { key: 'schedule', label: '📅 Schedule', adminOnly: false },
-    { key: 'distribute', label: '⚡ Distribute', adminOnly: false },
+    { key: 'distribute', label: '⚡ Distribute', adminOnly: true },
     { key: 'results', label: '📋 Results', adminOnly: false },
-    { key: 'stats', label: '📊 Statistics Load Ledger', adminOnly: false },
+    { key: 'stats', label: '📊 Statistics Load Ledger', adminOnly: true },
   ];
 
   const visiblePages = pages.filter(p => !p.adminOnly || isAdmin);
@@ -854,7 +906,18 @@ export default function ExamSystem() {
             {isConnected ? 'Live' : 'Offline'}
           </span>
           <button className="btn btn-ghost" onClick={exportCSV}>📥 Export CSV</button>
-          <button className="btn btn-ghost" onClick={resetAll}>🗑 Reset All</button>
+          {isAdmin && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--text2)' }}>
+            <span>User Edit:</span>
+            <button
+              onClick={() => toggleUserEditPermission(!userCanEditTeachers)}
+              style={{ width: 36, height: 20, borderRadius: 10, border: 'none', cursor: 'pointer', position: 'relative', transition: 'background 0.2s', background: userCanEditTeachers ? 'var(--success)' : 'var(--border)' }}
+            >
+              <div style={{ width: 16, height: 16, borderRadius: '50%', background: '#fff', position: 'absolute', top: 2, left: userCanEditTeachers ? 18 : 2, transition: 'left 0.2s' }} />
+            </button>
+          </div>
+          )}
+          {isAdmin && <button className="btn btn-ghost" onClick={resetAll}>🗑 Reset All</button>}
           <button className="btn btn-ghost" onClick={handleLogout}>🚪 Logout</button>
         </div>
       </header>
