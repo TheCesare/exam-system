@@ -2,6 +2,8 @@
 
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { createClient, RealtimeChannel } from '@supabase/supabase-js';
+import jsPDF from 'jspdf';
+import autoTable from 'jspdf-autotable';
 
 // ========== CONSTANTS ==========
 const DAYS = ['Saturday','Sunday','Monday','Tuesday','Wednesday','Thursday'];
@@ -240,21 +242,8 @@ export default function ExamSystem() {
 
   const saveTeacher = async () => {
     if (!formName.trim() || !formSubject) { showToast('Please complete all fields', 'error'); return; }
-    // User can only edit name and subject (not add new or change notes)
-    if (!isAdmin) {
-      if (!editTeacherId) { showToast('الاضافة للادمن فقط', 'error'); return; }
-      try {
-        await fetch('/api/teachers', {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ id: editTeacherId, name: formName.trim(), subject: formSubject, notes: formNotes })
-        });
-        showToast('Teacher updated', 'success');
-        cancelEdit();
-        loadTeachers();
-      } catch { showToast('Error saving teacher', 'error'); }
-      return;
-    }
+    // User (with permission) can add and edit
+    if (!isAdmin && !userCanEditTeachers) { showToast('مفيش صلاحية - اسأل الادمن', 'error'); return; }
     try {
       if (editTeacherId) {
         await fetch('/api/teachers', {
@@ -484,6 +473,97 @@ export default function ExamSystem() {
     URL.revokeObjectURL(url);
   };
 
+  // ========== EXPORT PDF (A4 per grade per day) ==========
+  const exportPDF = () => {
+    if (!results?.assignments) return;
+    const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+    const pageW = 210, pageH = 297, margin = 15;
+    let firstPage = true;
+
+    for (const day of DAYS) {
+      const sessions = results.assignments[day] || [];
+      for (const session of sessions) {
+        if (session.committees.length === 0) continue;
+
+        if (!firstPage) doc.addPage();
+        firstPage = false;
+
+        // Header
+        doc.setFontSize(16);
+        doc.setFont('helvetica', 'bold');
+        doc.text('Exam Supervision Schedule', pageW / 2, margin + 5, { align: 'center' });
+
+        doc.setFontSize(11);
+        doc.setFont('helvetica', 'normal');
+        doc.text(`Day: ${day}`, margin, margin + 18);
+        doc.text(`Grade: ${session.grade}`, margin + 80, margin + 18);
+        doc.text(`Time: ${session.time}`, margin, margin + 26);
+        doc.text(`Subject: ${session.subject || '-'}`, margin + 80, margin + 26);
+
+        // Line separator
+        doc.setDrawColor(100);
+        doc.line(margin, margin + 30, pageW - margin, margin + 30);
+
+        // Table data
+        const body = session.committees.map(c => [
+          `Room ${c.serial}`,
+          c.t1.name,
+          '',
+          c.t2.name,
+          ''
+        ]);
+
+        autoTable(doc, {
+          startY: margin + 35,
+          head: [['Room', 'Lead Supervisor', 'Signature', 'Associate Supervisor', 'Signature']],
+          body: body,
+          theme: 'grid',
+          styles: { fontSize: 10, cellPadding: 3, halign: 'center' },
+          headStyles: { fillColor: [30, 58, 95], textColor: 255, fontStyle: 'bold', halign: 'center' },
+          columnStyles: {
+            0: { cellWidth: 25 },
+            1: { cellWidth: 50, halign: 'left' },
+            2: { cellWidth: 35 },
+            3: { cellWidth: 50, halign: 'left' },
+            4: { cellWidth: 35 }
+          },
+          didDrawCell: (data) => {
+            // Draw signature box in signature columns (index 2 and 4)
+            if ((data.column.index === 2 || data.column.index === 4) && data.section === 'body') {
+              const x = data.cell.x + 2;
+              const y = data.cell.y + 2;
+              const w = data.cell.width - 4;
+              const h = data.cell.height - 4;
+              doc.setDrawColor(150);
+              doc.setLineWidth(0.3);
+              doc.rect(x, y, w, h);
+              // Small label under box
+              doc.setFontSize(7);
+              doc.setTextColor(150);
+              doc.text('Signature', data.cell.x + data.cell.width / 2, data.cell.y + data.cell.height - 1, { align: 'center' });
+              doc.setTextColor(0);
+            }
+          },
+          margin: { left: margin, right: margin }
+        });
+
+        // Footer
+        const finalY = (doc as any).lastAutoTable?.finalY || margin + 35 + 20;
+        doc.setFontSize(8);
+        doc.setTextColor(150);
+        doc.text('Exam Supervisor System - Auto Generated', pageW / 2, pageH - 10, { align: 'center' });
+      }
+    }
+
+    if (firstPage) {
+      showToast('No results to export', 'error');
+      return;
+    }
+
+    doc.save('exam_supervision_schedule.pdf');
+    showToast('PDF downloaded!', 'success');
+  };
+
   // ========== RESET ALL ==========
   const resetAll = async () => {
     if (!confirm('Perform dynamic hard reset?')) return;
@@ -572,10 +652,10 @@ export default function ExamSystem() {
     <div className="card">
       <div className="card-header">
         <div className="card-title">Teacher Registry</div>
-        {isAdmin && (
+        {(isAdmin || userCanEditTeachers) && (
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-          <button className="btn btn-demo" onClick={generateDemoTeachers}>🧪 Generate 200 Mock Teachers</button>
-          <button className="btn btn-ghost" onClick={importCSV}>📂 Import CSV</button>
+          {isAdmin && <button className="btn btn-demo" onClick={generateDemoTeachers}>🧪 Generate 200 Mock Teachers</button>}
+          {isAdmin && <button className="btn btn-ghost" onClick={importCSV}>📂 Import CSV</button>}
           <button className="btn btn-primary" onClick={() => { cancelEdit(); setShowAddTeacher(!showAddTeacher); }}>
             + Add New Teacher
           </button>
@@ -585,7 +665,7 @@ export default function ExamSystem() {
 
       {showAddTeacher && (
         <div style={{ background: 'var(--surface2)', borderRadius: 10, padding: 20, marginBottom: 20 }}>
-          <div className={isAdmin ? 'grid-3' : 'grid-2'}>
+          <div className="grid-3">
             <div className="form-group">
               <label className="form-label">Full Name</label>
               <input className="form-input" value={formName} onChange={e => setFormName(e.target.value)} placeholder="e.g. John Doe" />
@@ -597,12 +677,10 @@ export default function ExamSystem() {
                 {SUBJECTS.map(s => <option key={s} value={s}>{s}</option>)}
               </select>
             </div>
-            {isAdmin && (
             <div className="form-group">
               <label className="form-label">Stage Assignment Notes</label>
               <input className="form-input" value={formNotes} onChange={e => setFormNotes(e.target.value)} placeholder="e.g. prep, sec, primary" />
             </div>
-            )}
           </div>
           <div style={{ display: 'flex', gap: 10 }}>
             <button className="btn btn-primary" onClick={saveTeacher}>✓ Save Teacher</button>
@@ -730,6 +808,9 @@ export default function ExamSystem() {
 
     return (
       <div>
+        <div style={{ marginBottom: 16, display: 'flex', gap: 10 }}>
+          <button className="btn btn-primary" onClick={exportPDF}>📄 Download PDF (A4 Printable)</button>
+        </div>
         {DAYS.map(day => {
           const sessions = results.assignments[day] || [];
           if (sessions.length === 0) return null;
