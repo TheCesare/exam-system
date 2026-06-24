@@ -1,5 +1,7 @@
 'use client';
 
+export const dynamic = 'force-dynamic';
+
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { createClient, RealtimeChannel } from '@supabase/supabase-js';
 import jsPDF from 'jspdf';
@@ -74,6 +76,7 @@ export default function ExamSystem() {
 
   // Data state
   const [teachers, setTeachers] = useState<Teacher[]>([]);
+  const [teacherOrder, setTeacherOrder] = useState<string[]>([]); // explicit order
   const [schedule, setSchedule] = useState<ScheduleCell[]>([]);
   const [results, setResults] = useState<{ assignments: Record<string, SessionResult[]>; tracking: Record<string, TrackingEntry> } | null>(null);
 
@@ -92,13 +95,69 @@ export default function ExamSystem() {
   // Ref for Supabase realtime channels
   const channelsRef = useRef<RealtimeChannel[]>([]);
 
+  // ========== HELPER: Save teacher order to settings ==========
+  const saveTeacherOrder = async (ids: string[]) => {
+    try {
+      const res = await fetch('/api/settings');
+      if (res.ok) {
+        const current = await res.json();
+        await fetch('/api/settings', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ...current, teacher_order: ids })
+        });
+      }
+    } catch { /* silent */ }
+  };
+
+  // ========== LOAD SETTINGS ==========
+  const loadSettings = useCallback(async () => {
+    try {
+      const res = await fetch('/api/settings');
+      if (res.ok) {
+        const data = await res.json();
+        setUserCanEditTeachers(!!data.user_can_edit_teachers);
+        if (data.teacher_order && Array.isArray(data.teacher_order)) {
+          setTeacherOrder(data.teacher_order);
+          return data.teacher_order;
+        }
+      }
+    } catch { /* silent */ }
+    return [];
+  }, []);
+
   // ========== LOAD DATA ==========
-  const loadTeachers = useCallback(async () => {
+  const sortTeachersByOrder = useCallback((list: Teacher[], order: string[]): Teacher[] => {
+    if (!order || order.length === 0) return list;
+    const orderMap = new Map<string, number>();
+    order.forEach((id, idx) => orderMap.set(id, idx));
+    const maxOrder = order.length;
+    return [...list].sort((a, b) => {
+      const aIdx = orderMap.has(a.id) ? orderMap.get(a.id)! : maxOrder;
+      const bIdx = orderMap.has(b.id) ? orderMap.get(b.id)! : maxOrder;
+      if (aIdx !== bIdx) return aIdx - bIdx;
+      return 0;
+    });
+  }, []);
+
+  const loadTeachers = useCallback(async (forcedOrder?: string[]) => {
     try {
       const res = await fetch('/api/teachers');
-      if (res.ok) setTeachers(await res.json());
+      if (res.ok) {
+        const raw: Teacher[] = await res.json();
+        // Use forced order (from settings load) or current state
+        const order = forcedOrder || teacherOrder;
+        const sorted = sortTeachersByOrder(raw, order);
+        setTeachers(sorted);
+        // If no saved order yet, initialize from current data
+        if (order.length === 0 && raw.length > 0) {
+          const ids = raw.map(t => t.id);
+          setTeacherOrder(ids);
+          saveTeacherOrder(ids);
+        }
+      }
     } catch { /* silent */ }
-  }, []);
+  }, [teacherOrder, sortTeachersByOrder]);
 
   const loadSchedule = useCallback(async () => {
     try {
@@ -123,11 +182,14 @@ export default function ExamSystem() {
     } catch { /* silent */ }
   }, []);
 
-  const loadAll = useCallback(() => {
+  const loadAll = useCallback(async () => {
     setLoading(true);
-    Promise.all([loadTeachers(), loadSchedule(), loadResults()])
+    // Load settings first to get teacher_order
+    const order = await loadSettings();
+    // Pass the fresh order directly to loadTeachers
+    Promise.all([loadTeachers(order.length > 0 ? order : undefined), loadSchedule(), loadResults()])
       .finally(() => setLoading(false));
-  }, [loadTeachers, loadSchedule, loadResults]);
+  }, [loadTeachers, loadSchedule, loadResults, loadSettings]);
 
   // ========== SUPABASE REALTIME ==========
   useEffect(() => {
@@ -165,17 +227,6 @@ export default function ExamSystem() {
       resultsCh.unsubscribe();
     };
   }, [loadTeachers, loadSchedule, loadResults]);
-
-  // ========== LOAD SETTINGS ==========
-  const loadSettings = useCallback(async () => {
-    try {
-      const res = await fetch('/api/settings');
-      if (res.ok) {
-        const data = await res.json();
-        setUserCanEditTeachers(!!data.user_can_edit_teachers);
-      }
-    } catch { /* silent */ }
-  }, []);
 
   const toggleUserEditPermission = async (val: boolean) => {
     try {
@@ -226,6 +277,10 @@ export default function ExamSystem() {
     if (!confirm('Delete this teacher?')) return;
     try {
       await fetch(`/api/teachers?id=${id}`, { method: 'DELETE' });
+      // Remove from order
+      const newOrder = teacherOrder.filter(tid => tid !== id);
+      setTeacherOrder(newOrder);
+      saveTeacherOrder(newOrder);
       loadTeachers();
       showToast('Teacher deleted', 'success');
     } catch { showToast('Error deleting', 'error'); }
@@ -252,12 +307,19 @@ export default function ExamSystem() {
           body: JSON.stringify({ id: editTeacherId, name: formName.trim(), subject: formSubject, notes: formNotes.trim() })
         });
         showToast('Teacher updated', 'success');
+        // Order stays the same - no change to teacherOrder
       } else {
-        await fetch('/api/teachers', {
+        const res = await fetch('/api/teachers', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ name: formName.trim(), subject: formSubject, notes: formNotes.trim() })
         });
+        if (res.ok) {
+          const newTeacher = await res.json();
+          const newOrder = [...teacherOrder, newTeacher.id];
+          setTeacherOrder(newOrder);
+          saveTeacherOrder(newOrder);
+        }
         showToast('Teacher added successfully', 'success');
       }
       cancelEdit();
@@ -290,6 +352,8 @@ export default function ExamSystem() {
     }
     try {
       await fetch('/api/distribute', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ teachers: demoTeachers }) });
+      // Reset order - will be re-initialized from fresh data
+      setTeacherOrder([]);
       loadTeachers();
       showToast('Injected 200 Mock Teachers Successfully!', 'success');
     } catch { showToast('Error', 'error'); }
@@ -311,6 +375,8 @@ export default function ExamSystem() {
       if (imported.length === 0) { showToast('No valid data in CSV', 'error'); return; }
       try {
         await fetch('/api/distribute', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ teachers: imported }) });
+        // Reset order - will be re-initialized from fresh data
+        setTeacherOrder([]);
         loadTeachers();
         showToast(`Imported ${imported.length} teachers`, 'success');
       } catch { showToast('Import error', 'error'); }
