@@ -192,7 +192,7 @@ export default function ExamSystem() {
         if (data && data.data) {
           const d = data.data;
           // v6+ results must have _version >= 6. Old results → discard.
-          if (!d._version || d._version < 7) {
+          if (!d._version || d._version < 8) {
             await fetch('/api/results', { method: 'DELETE' });
             setResults(null);
           } else {
@@ -501,7 +501,7 @@ export default function ExamSystem() {
     };
 
     // ---- Helper: Fisher-Yates shuffle ----
-    const shuffle = <T>(arr: T[]): T[] => {
+    const shuffle = <T,>(arr: T[]): T[] => {
       const a = [...arr];
       for (let i = a.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
@@ -552,12 +552,14 @@ export default function ExamSystem() {
       return topGroup[Math.floor(Math.random() * topGroup.length)].teacher;
     };
 
-    // ---- Fallback 2: Relax subject + stage constraints (keep 1-per-day + time) ----
+    // ---- Fallback 2: Relax stage constraints only (keep own-subject, 1-per-day + time) ----
     const findBestRelaxed = (blockedId: string | null, slot: Slot, pool: Teacher[]): Teacher | null => {
       const candidates: { teacher: Teacher; score: number }[] = [];
       for (const t of pool) {
         if (blockedId && t.id === blockedId) continue;
         const tr = tracking[t.id];
+        // HARD: Still no own-subject supervision even in relaxed mode
+        if (ruleSubject && slot.subject && t.subject === slot.subject) continue;
         if (tr.assignedSlots.some(s => s.day === slot.day && !(slot.timeInfo.end <= s.start || slot.timeInfo.start >= s.end))) continue;
         if (ruleDayLimit && tr.dayComm[slot.day] >= 1) continue;
         const score = tr.totalHours * 200 + tr.totalComm * 5 + Math.random() * 0.2;
@@ -568,12 +570,14 @@ export default function ExamSystem() {
       return candidates[0].teacher;
     };
 
-    // ---- Fallback 3: Allow 2nd assignment same day (only time overlap blocked) ----
+    // ---- Fallback 3: Allow 2nd assignment same day (only time overlap + own-subject blocked) ----
     const findBestForceDay = (blockedId: string | null, slot: Slot, pool: Teacher[]): Teacher | null => {
       const candidates: { teacher: Teacher; score: number }[] = [];
       for (const t of pool) {
         if (blockedId && t.id === blockedId) continue;
         const tr = tracking[t.id];
+        // HARD: Still no own-subject supervision even in force-day mode
+        if (ruleSubject && slot.subject && t.subject === slot.subject) continue;
         if (tr.assignedSlots.some(s => s.day === slot.day && !(slot.timeInfo.end <= s.start || slot.timeInfo.start >= s.end))) continue;
         const score = tr.totalHours * 200 + tr.totalComm * 5 + (tr.dayComm[slot.day] || 0) * 50 + Math.random() * 0.2;
         candidates.push({ teacher: t, score });
@@ -583,7 +587,7 @@ export default function ExamSystem() {
       return candidates[0].teacher;
     };
 
-    // ---- Process each day chronologically, shuffle slots within day ----
+    // ---- Process each day chronologically, shuffle slots within day for variety ----
     let standbyCount = 0;
     const allPool = [...teachers]; // ALL teachers including admin
 
@@ -834,17 +838,29 @@ export default function ExamSystem() {
     // Final hour recalculation after all balancing
     recalcHours();
 
+    // ---- Sort committees by serial within each session (1, 2, 3...) ----
+    for (const day of DAYS) {
+      for (const sess of finalAssignments[day]) {
+        sess.committees.sort((a, b) => a.serial - b.serial);
+      }
+    }
+
     // ---- Post-distribution: STANDBY ASSIGNMENT ----
-    // 2 standby teachers per stage per day from unassigned teachers
+    // 1 standby teacher per stage per day from unassigned teachers
+    // CRITICAL: Standby must NOT be the same subject as any exam that day for that stage
     // Rotation: prefer teachers who weren't standby yesterday, fewest total standby days
     const STAGES_LIST = ['primary', 'prep', 'sec'] as const;
-    const STANDBY_PER_STAGE = 2;
+    const STANDBY_PER_STAGE = 1;
     const standbys: Record<string, Record<string, StandbyEntry[]>> = {};
     DAYS.forEach(d => { standbys[d] = {}; STAGES_LIST.forEach(s => { standbys[d][s] = []; }); });
 
     // Track standby count per teacher for rotation fairness
     const teacherStandbyCount: Record<string, number> = {};
     teachers.forEach(t => { teacherStandbyCount[t.id] = 0; });
+
+    // Track which teachers are already standby for another stage today
+    const todayStandby: Record<string, Set<string>> = {};
+    DAYS.forEach(d => { todayStandby[d] = new Set(); });
 
     for (let di = 0; di < DAYS.length; di++) {
       const day = DAYS[di];
@@ -854,10 +870,18 @@ export default function ExamSystem() {
         const stageSessions = (finalAssignments[day] || []).filter(s => getStage(s.grade) === stage);
         if (stageSessions.length === 0) continue;
 
+        // Collect subjects being examined today for this stage
+        const dayStageSubjects = new Set<string>();
+        stageSessions.forEach(s => { if (s.subject) dayStageSubjects.add(s.subject); });
+
         // Find teachers NOT assigned on this day who can supervise this stage
+        // AND whose subject doesn't match any exam subject for this stage today
         let candidates = teachers.filter(t => {
           if ((tracking[t.id].dayComm[day] || 0) >= 1) return false;
+          if (todayStandby[day].has(t.id)) return false; // already standby for another stage today
           if (!canSuperviseStage(t, stage)) return false;
+          // CRITICAL: Don't pick a teacher whose subject is being examined today
+          if (ruleSubject && t.subject && dayStageSubjects.has(t.subject)) return false;
           return true;
         });
 
@@ -879,9 +903,10 @@ export default function ExamSystem() {
         const picked = candidates.slice(0, STANDBY_PER_STAGE);
         standbys[day][stage] = picked.map(t => ({ id: t.id, name: t.name }));
 
-        // Only track rotation count — do NOT update tracking (standby is informational)
+        // Track rotation count and mark as standby for today (so same teacher isn't picked for another stage)
         for (const s of picked) {
           teacherStandbyCount[s.id]++;
+          todayStandby[day].add(s.id);
         }
       }
     }
@@ -945,19 +970,19 @@ export default function ExamSystem() {
     const allH = teachers.map(t => tracking[t.id]?.totalHours || 0);
     const avgAll = allH.length ? allH.reduce((a, b) => a + b, 0) / allH.length : 0;
     const spread = allH.length ? Math.sqrt(allH.reduce((s, h) => s + (h - avgAll) ** 2, 0) / allH.length) : 0;
-    let msg = `v7 | Avg: ${avgAll.toFixed(1)}h | Spread: ${spread.toFixed(1)} | Min: ${allH.length ? Math.min(...allH).toFixed(1) : 0}h | Max: ${allH.length ? Math.max(...allH).toFixed(1) : 0}h`;
+    let msg = `v8 | Avg: ${avgAll.toFixed(1)}h | Spread: ${spread.toFixed(1)} | Min: ${allH.length ? Math.min(...allH).toFixed(1) : 0}h | Max: ${allH.length ? Math.max(...allH).toFixed(1) : 0}h`;
     // Count total standby assigned
     const totalStandby = Object.values(standbys).reduce((a, daySt) => a + Object.values(daySt).reduce((b, stList) => b + stList.length, 0), 0);
     if (totalStandby > 0) msg += ` | ${totalStandby} standby (${STANDBY_PER_STAGE}/stage/day)`;
     if (standbyCount > 0) msg += ` | ${standbyCount} unfilled`;
     if (violations.length > 0) {
       msg += ` | ${violations.length} violations (check console)`;
-      console.warn('[Distribution v4] Violations:', violations);
+      console.warn('[Distribution v8] Violations:', violations);
     } else {
-      console.log('[Distribution v4] All constraints passed!');
+      console.log('[Distribution v8] All constraints passed!');
     }
 
-    const newResults: DistributionResults = { _version: 7, assignments: finalAssignments, standbys, tracking };
+    const newResults: DistributionResults = { _version: 8, assignments: finalAssignments, standbys, tracking };
     setResults(newResults);
     fetch('/api/results', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: newResults }) });
     showToast(msg, standbyCount > 0 || violations.length > 0 ? 'error' : 'success');
