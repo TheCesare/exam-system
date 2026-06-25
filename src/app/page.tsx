@@ -28,6 +28,13 @@ interface ScheduleCell { id?: string; grade: string; day: string; committees: nu
 interface TrackingEntry { totalComm: number; totalHours: number; dayComm: Record<string,number>; assignedSlots: {day:string;start:number;end:number}[]; gradeHistory: {dayIndex:number;grade:string}[]; }
 interface CommitteeResult { serial: number; t1: {id:string|null;name:string}; t2: {id:string|null;name:string}; }
 interface SessionResult { grade: string; time: string; subject: string; committees: CommitteeResult[]; }
+interface StandbyEntry { id: string; name: string; }
+interface DistributionResults {
+  _version: number;
+  assignments: Record<string, SessionResult[]>;
+  standbys: Record<string, Record<string, StandbyEntry[]>>;
+  tracking: Record<string, TrackingEntry>;
+}
 
 type View = 'login' | 'user' | 'admin';
 type Page = 'teachers' | 'schedule' | 'distribute' | 'results' | 'stats';
@@ -83,7 +90,7 @@ export default function ExamSystem() {
   const [teachers, setTeachers] = useState<Teacher[]>([]);
   const [teacherOrder, setTeacherOrder] = useState<string[]>([]); // explicit order
   const [schedule, setSchedule] = useState<ScheduleCell[]>([]);
-  const [results, setResults] = useState<{ assignments: Record<string, SessionResult[]>; tracking: Record<string, TrackingEntry> } | null>(null);
+  const [results, setResults] = useState<DistributionResults | null>(null);
 
   // UI state
   const [activePage, setActivePage] = useState<Page>('teachers');
@@ -184,8 +191,8 @@ export default function ExamSystem() {
         const data = await res.json();
         if (data && data.data) {
           const d = data.data;
-          // v4+ results must have _version >= 4. Old v3 results lack this → discard.
-          if (!d._version || d._version < 5) {
+          // v6+ results must have _version >= 6. Old results → discard.
+          if (!d._version || d._version < 6) {
             await fetch('/api/results', { method: 'DELETE' });
             setResults(null);
           } else {
@@ -792,6 +799,69 @@ export default function ExamSystem() {
     // Final hour recalculation after all balancing
     recalcHours();
 
+    // ---- Post-distribution: STANDBY ASSIGNMENT ----
+    // 2 standby teachers per stage per day from unassigned teachers
+    // Rotation: prefer teachers who weren't standby yesterday, fewest total standby days
+    const STAGES_LIST = ['primary', 'prep', 'sec'] as const;
+    const STANDBY_PER_STAGE = 2;
+    const standbys: Record<string, Record<string, StandbyEntry[]>> = {};
+    DAYS.forEach(d => { standbys[d] = {}; STAGES_LIST.forEach(s => { standbys[d][s] = []; }); });
+
+    // Track standby count per teacher for rotation fairness
+    const teacherStandbyCount: Record<string, number> = {};
+    teachers.forEach(t => { teacherStandbyCount[t.id] = 0; });
+
+    for (let di = 0; di < DAYS.length; di++) {
+      const day = DAYS[di];
+
+      for (const stage of STAGES_LIST) {
+        // Only assign standby if there are exams for this stage on this day
+        const stageSessions = (finalAssignments[day] || []).filter(s => getStage(s.grade) === stage);
+        if (stageSessions.length === 0) continue;
+
+        // Find teachers NOT assigned on this day who can supervise this stage
+        let candidates = teachers.filter(t => {
+          if ((tracking[t.id].dayComm[day] || 0) >= 1) return false;
+          if (!canSuperviseStage(t, stage)) return false;
+          return true;
+        });
+
+        // Rotation: deprioritize teachers who were standby YESTERDAY for ANY stage
+        const yesterdayStandby = new Set<string>();
+        if (di > 0) {
+          const prevDay = DAYS[di - 1];
+          for (const st of STAGES_LIST) {
+            (standbys[prevDay][st] || []).forEach(s => yesterdayStandby.add(s.id));
+          }
+        }
+        candidates.sort((a, b) => {
+          const aWasYesterday = yesterdayStandby.has(a.id) ? 100 : 0;
+          const bWasYesterday = yesterdayStandby.has(b.id) ? 100 : 0;
+          return (teacherStandbyCount[a.id] + aWasYesterday) - (teacherStandbyCount[b.id] + bWasYesterday);
+        });
+
+        // Pick up to STANDBY_PER_STAGE
+        const picked = candidates.slice(0, STANDBY_PER_STAGE);
+        standbys[day][stage] = picked.map(t => ({ id: t.id, name: t.name }));
+
+        // Update tracking for picked standby teachers
+        for (const s of picked) {
+          tracking[s.id].totalComm++;
+          tracking[s.id].dayComm[day] = (tracking[s.id].dayComm[day] || 0) + 1;
+          teacherStandbyCount[s.id]++;
+
+          // Hours: use the longest session duration for this stage on this day
+          let maxDuration = 0;
+          for (const sess of stageSessions) {
+            const ti = parseTimeRange(sess.time || '9:00-10:30');
+            if (ti.duration > maxDuration) maxDuration = ti.duration;
+          }
+          if (maxDuration === 0) maxDuration = 1.5;
+          tracking[s.id].totalHours += maxDuration;
+        }
+      }
+    }
+
     // ---- Post-distribution verification ----
     const violations: string[] = [];
     // V-Check 1: Own-subject supervision
@@ -851,8 +921,11 @@ export default function ExamSystem() {
     const allH = teachers.map(t => tracking[t.id]?.totalHours || 0);
     const avgAll = allH.length ? allH.reduce((a, b) => a + b, 0) / allH.length : 0;
     const spread = allH.length ? Math.sqrt(allH.reduce((s, h) => s + (h - avgAll) ** 2, 0) / allH.length) : 0;
-    let msg = `v4 | Avg: ${avgAll.toFixed(1)}h | Spread: ${spread.toFixed(1)} | Min: ${allH.length ? Math.min(...allH).toFixed(1) : 0}h | Max: ${allH.length ? Math.max(...allH).toFixed(1) : 0}h`;
-    if (standbyCount > 0) msg += ` | ${standbyCount} standby`;
+    let msg = `v6 | Avg: ${avgAll.toFixed(1)}h | Spread: ${spread.toFixed(1)} | Min: ${allH.length ? Math.min(...allH).toFixed(1) : 0}h | Max: ${allH.length ? Math.max(...allH).toFixed(1) : 0}h`;
+    // Count total standby assigned
+    const totalStandby = Object.values(standbys).reduce((a, daySt) => a + Object.values(daySt).reduce((b, stList) => b + stList.length, 0), 0);
+    if (totalStandby > 0) msg += ` | ${totalStandby} standby (${STANDBY_PER_STAGE}/stage/day)`;
+    if (standbyCount > 0) msg += ` | ${standbyCount} unfilled`;
     if (violations.length > 0) {
       msg += ` | ${violations.length} violations (check console)`;
       console.warn('[Distribution v4] Violations:', violations);
@@ -860,7 +933,7 @@ export default function ExamSystem() {
       console.log('[Distribution v4] All constraints passed!');
     }
 
-    const newResults = { _version: 5, assignments: finalAssignments, tracking };
+    const newResults: DistributionResults = { _version: 6, assignments: finalAssignments, standbys, tracking };
     setResults(newResults);
     fetch('/api/results', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: newResults }) });
     showToast(msg, standbyCount > 0 || violations.length > 0 ? 'error' : 'success');
@@ -870,14 +943,22 @@ export default function ExamSystem() {
   // ========== EXPORT CSV ==========
   const exportCSV = () => {
     if (!results?.assignments) return;
-    let csv = 'Day,Grade,Time,Subject,Committee,Supervisor1,Supervisor2\n';
+    let csv = 'Day,Grade,Time,Subject,Committee,Supervisor1,Supervisor2,Role\n';
     DAYS.forEach(day => {
       const sessions = results.assignments[day] || [];
       sessions.forEach(s => {
         s.committees.forEach(c => {
-          csv += `"${day}","${s.grade}","${s.time}","${s.subject || ''}","Room ${c.serial}","${c.t1.name}","${c.t2.name}"\n`;
+          csv += `"${day}","${s.grade}","${s.time}","${s.subject || ''}","Room ${c.serial}","${c.t1.name}","${c.t2.name}","Primary"\n`;
         });
       });
+      if (results.standbys?.[day]) {
+        const STAGE_CSV: Record<string, string> = { primary: 'Primary', prep: 'Prep', sec: 'Secondary' };
+        for (const stage of ['primary', 'prep', 'sec']) {
+          for (const s of (results.standbys[day][stage] || [])) {
+            csv += `"${day}","${STAGE_CSV[stage]}","","","Standby","${s.name}","","Standby"\n`;
+          }
+        }
+      }
     });
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
@@ -962,6 +1043,70 @@ export default function ExamSystem() {
 
         // Footer
         const finalY = (doc as any).lastAutoTable?.finalY || margin + 35 + 20;
+        doc.setFontSize(8);
+        doc.setTextColor(150);
+        doc.text('Exam Supervisor System - Auto Generated', pageW / 2, pageH - 10, { align: 'center' });
+      }
+
+      // Add standby page for this day (after all grades)
+      const daySt = results.standbys?.[day];
+      const hasDayStandby = daySt && Object.values(daySt).some(s => s.length > 0);
+      if (hasDayStandby) {
+        if (!firstPage) doc.addPage();
+        firstPage = false;
+
+        doc.setFontSize(16);
+        doc.setFont('helvetica', 'bold');
+        doc.text('Standby Supervisors', pageW / 2, margin + 5, { align: 'center' });
+
+        doc.setFontSize(11);
+        doc.setFont('helvetica', 'normal');
+        doc.text(`Day: ${day}`, margin, margin + 18);
+
+        doc.setDrawColor(100);
+        doc.line(margin, margin + 22, pageW - margin, margin + 22);
+
+        const STAGE_PDF: Record<string, string> = { primary: 'Primary Stage', prep: 'Prep Stage', sec: 'Secondary Stage' };
+        const standbyBody: string[][] = [];
+        for (const stage of ['primary', 'prep', 'sec']) {
+          const list = daySt[stage] || [];
+          if (list.length === 0) continue;
+          list.forEach((s, i) => {
+            standbyBody.push([i === 0 ? STAGE_PDF[stage] : '', s.name, '', '']);
+          });
+        }
+
+        autoTable(doc, {
+          startY: margin + 28,
+          head: [['Stage', 'Standby Supervisor', 'Signature', 'Notes']],
+          body: standbyBody,
+          theme: 'grid',
+          styles: { fontSize: 10, cellPadding: 3, halign: 'center' },
+          headStyles: { fillColor: [180, 120, 20], textColor: 255, fontStyle: 'bold', halign: 'center' },
+          columnStyles: {
+            0: { cellWidth: 40, halign: 'left' },
+            1: { cellWidth: 55, halign: 'left' },
+            2: { cellWidth: 35 },
+            3: { cellWidth: 40 },
+          },
+          didDrawCell: (data) => {
+            if (data.column.index === 2 && data.section === 'body') {
+              const x = data.cell.x + 2;
+              const y = data.cell.y + 2;
+              const w = data.cell.width - 4;
+              const h = data.cell.height - 4;
+              doc.setDrawColor(150);
+              doc.setLineWidth(0.3);
+              doc.rect(x, y, w, h);
+              doc.setFontSize(7);
+              doc.setTextColor(150);
+              doc.text('Signature', data.cell.x + data.cell.width / 2, data.cell.y + data.cell.height - 1, { align: 'center' });
+              doc.setTextColor(0);
+            }
+          },
+          margin: { left: margin, right: margin }
+        });
+
         doc.setFontSize(8);
         doc.setTextColor(150);
         doc.text('Exam Supervisor System - Auto Generated', pageW / 2, pageH - 10, { align: 'center' });
@@ -1227,6 +1372,9 @@ export default function ExamSystem() {
   const renderResultsPage = () => {
     if (!results?.assignments) return <div className="card"><div className="empty-state"><p>Execute the distribution engine to view results</p></div></div>;
 
+    const STAGE_LABELS: Record<string, string> = { primary: 'ابتدائي', prep: 'اعدادي', sec: 'ثانوي' };
+    const STAGE_COLORS: Record<string, string> = { primary: '#f59e0b', prep: '#8b5cf6', sec: '#06b6d4' };
+
     return (
       <div>
         <div style={{ marginBottom: 16, display: 'flex', gap: 10 }}>
@@ -1234,7 +1382,9 @@ export default function ExamSystem() {
         </div>
         {DAYS.map(day => {
           const sessions = results.assignments[day] || [];
-          if (sessions.length === 0) return null;
+          const dayStandbys = results.standbys?.[day];
+          const hasStandby = dayStandbys && Object.values(dayStandbys).some(s => s.length > 0);
+          if (sessions.length === 0 && !hasStandby) return null;
           return (
             <div key={day} className="result-day">
               <div className="result-day-header" onClick={() => {
@@ -1274,6 +1424,24 @@ export default function ExamSystem() {
                     })}
                   </div>
                 ))}
+                {/* Standby section */}
+                {hasStandby && (
+                  <div style={{ marginTop: 12, background: 'rgba(245,158,11,0.06)', border: '1px solid rgba(245,158,11,0.2)', borderRadius: 10, padding: '12px 16px' }}>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: '#f59e0b', marginBottom: 8 }}>📍 الاحتياطي / Standby Supervisors</div>
+                    {['primary', 'prep', 'sec'].map(stage => {
+                      const stList = dayStandbys?.[stage] || [];
+                      if (stList.length === 0) return null;
+                      return (
+                        <div key={stage} style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
+                          <span style={{ fontSize: 12, fontWeight: 700, color: STAGE_COLORS[stage], background: `${STAGE_COLORS[stage]}18`, padding: '2px 10px', borderRadius: 6 }}>{STAGE_LABELS[stage]}</span>
+                          <span style={{ fontSize: 13, color: 'var(--text)' }}>
+                            {stList.map((s, i) => <span key={s.id}>{i > 0 && ' , '}{s.name}</span>)}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             </div>
           );
@@ -1282,20 +1450,20 @@ export default function ExamSystem() {
     );
   };
 
-  // ========== STATS PAGE (v4 — hours from ACTUAL assignments) ==========
+  // ========== STATS PAGE (v6 — hours from assignments + standby) ==========
   const renderStatsPage = () => {
     if (!results?.assignments || teachers.length === 0) return <div className="card"><div className="empty-state"><p>No analytics to track.</p></div></div>;
 
     // ---- Calculate ALL stats from actual assignments (source of truth) ----
-    // This completely eliminates any tracking accumulation bugs
     const teacherStats: Record<string, {
       totalComm: number; totalHours: number;
       dayComm: Record<string, number>;
+      dayStandby: Record<string, boolean>;
       assignedSlots: {day:string;start:number;end:number}[];
     }> = {};
     teachers.forEach(t => {
-      teacherStats[t.id] = { totalComm: 0, totalHours: 0, dayComm: {} as Record<string,number>, assignedSlots: [] };
-      DAYS.forEach(d => { teacherStats[t.id].dayComm[d] = 0; });
+      teacherStats[t.id] = { totalComm: 0, totalHours: 0, dayComm: {} as Record<string,number>, dayStandby: {} as Record<string,boolean>, assignedSlots: [] };
+      DAYS.forEach(d => { teacherStats[t.id].dayComm[d] = 0; teacherStats[t.id].dayStandby[d] = false; });
     });
 
     for (const day of DAYS) {
@@ -1315,6 +1483,30 @@ export default function ExamSystem() {
               ts.totalHours += ti.duration;
             }
           });
+        }
+      }
+    }
+
+    // Count standby assignments in stats
+    if (results.standbys) {
+      for (const day of DAYS) {
+        const daySt = results.standbys[day] || {};
+        for (const stage of ['primary', 'prep', 'sec']) {
+          for (const s of (daySt[stage] || [])) {
+            const ts = teacherStats[s.id];
+            if (!ts) continue;
+            ts.totalComm++;
+            ts.dayStandby[day] = true; // mark as standby (not primary)
+            // Hours: use the longest session for this stage on this day
+            const stageSessions = (results.assignments[day] || []).filter(sess => getStage(sess.grade) === stage);
+            let maxDur = 0;
+            for (const sess of stageSessions) {
+              const ti = parseTimeRange(sess.time || '9:00-10:30');
+              if (ti.duration > maxDur) maxDur = ti.duration;
+            }
+            if (maxDur === 0) maxDur = 1.5;
+            ts.totalHours += maxDur;
+          }
         }
       }
     }
@@ -1378,8 +1570,10 @@ export default function ExamSystem() {
                       <td><span className="badge badge-blue">{t.subject}</span></td>
                       {DAYS.map(d => {
                         const val = ts.dayComm[d] || 0;
-                        const cellColor = val >= 2 ? 'var(--danger)' : val === 1 ? 'var(--accent3)' : 'var(--text2)';
-                        return <td key={d} style={{ textAlign: 'center', fontWeight: 600, color: cellColor }}>{val || '-'}</td>;
+                        const isStandby = ts.dayStandby[d];
+                        const cellColor = val >= 2 ? 'var(--danger)' : isStandby ? '#f59e0b' : val === 1 ? 'var(--accent3)' : 'var(--text2)';
+                        const cellText = isStandby ? 'S' : (val || '-');
+                        return <td key={d} style={{ textAlign: 'center', fontWeight: 600, color: cellColor, fontSize: isStandby ? 11 : undefined }}>{cellText}</td>;
                       })}
                       <td style={{ textAlign: 'center', fontWeight: 700, color: 'var(--accent)', fontFamily: 'var(--mono)' }}>{ts.totalComm}</td>
                       <td style={{ background: 'rgba(0,255,157,0.03)', padding: '8px 14px' }}>
@@ -1413,7 +1607,7 @@ export default function ExamSystem() {
   };
 
   // ========== MAIN APP RENDER ==========
-  const hasResults = !!(results?.assignments && results?.tracking);
+  const hasResults = !!(results?.assignments && results?.standbys && results?.tracking);
   const pages: { key: Page; label: string; adminOnly: boolean; requiresResults?: boolean }[] = [
     { key: 'teachers', label: '👨‍🏫 Teachers', adminOnly: false },
     { key: 'schedule', label: '📅 Schedule', adminOnly: false },
