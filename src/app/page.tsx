@@ -487,14 +487,20 @@ export default function ExamSystem() {
       return tr.gradeHistory.some(h => Math.abs(h.dayIndex - slot.dayIndex) === 1 && h.grade === slot.grade);
     };
 
+    // ---- Admin minimum assignment tracking ----
+    let adminTotalAssignments = 0;
+    const adminMinTarget = adminTeachers.length * 2;
+
     // ---- Core: Find best teacher for a slot ----
     // Scoring: fewer hours + fewer committees + random noise = better candidate (lower score wins)
+    // adminPenalty: positive = penalize admin, negative = bonus for admin
     const findBest = (
       blockedId: string | null,
       slot: Slot,
       pool: Teacher[],
       relaxDay: boolean,
-      relaxAdj: boolean
+      relaxAdj: boolean,
+      adminPenalty: number = 0
     ): Teacher | null => {
       const candidates: { teacher: Teacher; score: number }[] = [];
       for (const t of pool) {
@@ -511,15 +517,15 @@ export default function ExamSystem() {
         if (relaxDay && tr.dayComm[slot.day] >= 2) continue;
         // HARD RULE 5: No same grade on consecutive days (variety)
         if (!relaxAdj && wasSameGradeAdjacent(tr, slot)) continue;
-        // Score: lower = better candidate (prefer teachers with fewer hours/committees)
-        const score = tr.totalHours * 10 + tr.totalComm * 5 + Math.random() * 3;
+        // Score: high hour weight for tight balance, low noise for determinism
+        const score = tr.totalHours * 100 + tr.totalComm * 20 + (t.subject === 'Admin' ? adminPenalty : 0) + Math.random() * 0.5;
         candidates.push({ teacher: t, score });
       }
       if (candidates.length === 0) return null;
       candidates.sort((a, b) => a.score - b.score);
-      // Pick from top candidates (within threshold) for more randomness
+      // Tight threshold for best balance (randomness comes from shuffle order)
       const best = candidates[0].score;
-      const topGroup = candidates.filter(c => c.score <= best + 5);
+      const topGroup = candidates.filter(c => c.score <= best + 1);
       return topGroup[Math.floor(Math.random() * topGroup.length)].teacher;
     };
 
@@ -548,18 +554,17 @@ export default function ExamSystem() {
         tr.gradeHistory.push({ dayIndex: slot.dayIndex, grade: slot.grade });
       } else { standbyCount++; }
 
-      // === Teacher 2: Same priority chain, blocked from being same as t1 ===
+      // === Teacher 2: Mixed pool (subject + admin) with dynamic admin penalty ===
       const blocked = t1?.id || null;
-      t2 = findBest(blocked, slot, subjectTeachers, false, false);
-      if (!t2) t2 = findBest(blocked, slot, subjectTeachers, false, true);
-      if (!t2) t2 = findBest(blocked, slot, subjectTeachers, true, false);
-      if (!t2) t2 = findBest(blocked, slot, subjectTeachers, true, true);
-      if (!t2) t2 = findBest(blocked, slot, adminTeachers, false, false);
-      if (!t2) t2 = findBest(blocked, slot, adminTeachers, false, true);
-      if (!t2) t2 = findBest(blocked, slot, adminTeachers, true, false);
-      if (!t2) t2 = findBest(blocked, slot, adminTeachers, true, true);
+      const mixedPool = [...subjectTeachers, ...adminTeachers];
+      const admPen = adminTotalAssignments < adminMinTarget ? -20 : 15;
+      t2 = findBest(blocked, slot, mixedPool, false, false, admPen);
+      if (!t2) t2 = findBest(blocked, slot, mixedPool, false, true, admPen);
+      if (!t2) t2 = findBest(blocked, slot, mixedPool, true, false, admPen);
+      if (!t2) t2 = findBest(blocked, slot, mixedPool, true, true, admPen);
 
       if (t2) {
+        if (t2.subject === 'Admin') adminTotalAssignments++;
         const tr = tracking[t2.id];
         tr.totalComm++; tr.dayComm[slot.day]++;
         tr.totalHours += slot.timeInfo.duration;
@@ -1095,24 +1100,27 @@ export default function ExamSystem() {
       tr[t.id].totalHours = uniqueHours;
     });
 
-    let totalComAll = 0, totalHrsAll = 0, over5Count = 0, notUsedCount = 0;
+    let totalComAll = 0, totalHrsAll = 0, notUsedCount = 0;
     teachers.forEach(t => {
       const tt = tr[t.id] || { totalComm: 0, totalHours: 0 };
       totalComAll += tt.totalComm || 0;
       totalHrsAll += tt.totalHours || 0;
-      if ((tt.totalHours || 0) > 5) over5Count++;
       if ((tt.totalComm || 0) === 0) notUsedCount++;
     });
     const maxHrs = Math.max(...teachers.map(t => tr[t.id]?.totalHours || 0));
+    const minHrs = Math.min(...teachers.map(t => tr[t.id]?.totalHours || 0));
+    const avgHrs = totalHrsAll / Math.max(teachers.length, 1);
+    const overAvgCount = teachers.filter(t => (tr[t.id]?.totalHours || 0) > avgHrs).length;
     const sorted = [...teachers].sort((a, b) => (tr[b.id]?.totalHours || 0) - (tr[a.id]?.totalHours || 0));
 
     return (
       <>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 12, marginBottom: 20 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 12, marginBottom: 20 }}>
           <div className="stat-card"><span className="stat-number">{totalHrsAll.toFixed(1)}</span><div className="stat-label">Total Hours (All)</div></div>
           <div className="stat-card"><span className="stat-number">{(totalHrsAll / Math.max(teachers.length, 1)).toFixed(1)}</span><div className="stat-label">Avg Hours / Teacher</div></div>
           <div className="stat-card"><span className="stat-number">{maxHrs.toFixed(1)}</span><div className="stat-label">Max Hours (1 Teacher)</div></div>
-          <div className="stat-card"><span className="stat-number" style={{ color: 'var(--danger)' }}>{over5Count}</span><div className="stat-label">Over 5h ⚠️</div></div>
+          <div className="stat-card"><span className="stat-number" style={{ color: (maxHrs - minHrs) > 2 ? 'var(--danger)' : 'var(--accent3)' }}>{(maxHrs - minHrs).toFixed(1)}h</span><div className="stat-label">Max-Min Spread</div></div>
+          <div className="stat-card"><span className="stat-number" style={{ color: 'var(--danger)' }}>{overAvgCount}</span><div className="stat-label">Over Avg ⚠️</div></div>
           <div className="stat-card"><span className="stat-number" style={{ color: 'var(--warning)' }}>{notUsedCount}</span><div className="stat-label">Not Assigned</div></div>
         </div>
         <div className="card">
@@ -1133,10 +1141,10 @@ export default function ExamSystem() {
                   const tt = tr[t.id] || { totalComm: 0, totalHours: 0, dayComm: {} };
                   const hrs = tt.totalHours || 0;
                   const pct = maxHrs > 0 ? Math.round(hrs / maxHrs * 100) : 0;
-                  const hrsColor = hrs > 5 ? 'var(--danger)' : hrs > 3 ? 'var(--accent3)' : hrs > 0 ? 'var(--accent)' : 'var(--text2)';
+                  const hrsColor = hrs === 0 ? 'var(--text2)' : hrs > avgHrs ? 'var(--danger)' : 'var(--accent3)';
                   const status = hrs === 0 ? <span className="badge" style={{ background: 'rgba(255,68,68,0.1)', color: 'var(--danger)' }}>Not Used</span>
-                    : hrs > 5 ? <span className="badge" style={{ background: 'rgba(255,68,68,0.1)', color: 'var(--danger)' }}>Over 5h ⚠️</span>
-                    : <span className="badge" style={{ background: 'rgba(0,255,157,0.1)', color: 'var(--accent3)' }}>OK ✓</span>;
+                    : hrs > avgHrs ? <span className="badge" style={{ background: 'rgba(255,68,68,0.15)', color: 'var(--danger)' }}>Over Avg ⚠️</span>
+                    : <span className="badge" style={{ background: 'rgba(0,255,157,0.1)', color: 'var(--accent3)' }}>Balanced ✓</span>;
                   return (
                     <tr key={t.id}>
                       <td style={{ color: 'var(--text2)' }}>{i + 1}</td>
