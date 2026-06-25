@@ -412,7 +412,7 @@ export default function ExamSystem() {
     } catch { /* silent */ }
   };
 
-  // ========== DISTRIBUTION ENGINE v2 ==========
+  // ========== DISTRIBUTION ENGINE v3 ==========
   const runDistribution = () => {
     if (teachers.length === 0) { showToast('Error: Registry empty!', 'error'); return; }
 
@@ -420,19 +420,20 @@ export default function ExamSystem() {
     const ruleDayLimit = (document.getElementById('rule-daylimit') as HTMLInputElement)?.checked ?? true;
     const ruleNotes = (document.getElementById('rule-notes') as HTMLInputElement)?.checked ?? true;
 
-    // Separate: subject teachers first, Admin teachers as last-resort fillers
+    // ---- Separate teacher pools: subject teachers first, admin as last-resort fillers ----
     const subjectTeachers = teachers.filter(t => t.subject !== 'Admin');
     const adminTeachers = teachers.filter(t => t.subject === 'Admin');
 
-    // Initialize tracking with grade history for consecutive-day rule
+    // ---- Initialize tracking ----
     const tracking: Record<string, TrackingEntry> = {};
     teachers.forEach(t => {
       tracking[t.id] = { totalComm: 0, totalHours: 0, dayComm: {} as Record<string,number>, assignedSlots: [], gradeHistory: [] };
       DAYS.forEach(d => { tracking[t.id].dayComm[d] = 0; });
     });
 
-    // Build all slots from schedule
-    const allSlots: { day: string; dayIndex: number; grade: string; stage: string; subject: string; time: string; timeInfo: ReturnType<typeof parseTimeRange>; comId: number }[] = [];
+    // ---- Build all exam slots from schedule ----
+    type Slot = { day: string; dayIndex: number; grade: string; stage: string; subject: string; time: string; timeInfo: ReturnType<typeof parseTimeRange>; comId: number };
+    const allSlots: Slot[] = [];
     DAYS.forEach((day, dayIndex) => {
       GRADES.forEach(grade => {
         const cell = scheduleBuffer[`${grade}__${day}`];
@@ -445,10 +446,13 @@ export default function ExamSystem() {
       });
     });
 
-    // Sort by duration descending (longest sessions first = better balance)
-    allSlots.sort((a, b) => b.timeInfo.duration - a.timeInfo.duration);
+    // ---- RANDOM SHUFFLE (Fisher-Yates) — different result every run ----
+    for (let i = allSlots.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [allSlots[i], allSlots[j]] = [allSlots[j], allSlots[i]];
+    }
 
-    // Build final assignments structure
+    // ---- Build final assignments structure ----
     const finalAssignments: Record<string, SessionResult[]> = {};
     DAYS.forEach(d => { finalAssignments[d] = []; });
     DAYS.forEach(day => {
@@ -463,125 +467,111 @@ export default function ExamSystem() {
       });
     });
 
-    // ---- Helper: check consecutive-day rule ----
-    const wasSameGradeOnAdjacentDay = (tr: TrackingEntry, slot: typeof allSlots[0]): boolean => {
+    // ---- Helper: Stage notes — HARD constraint ----
+    // If teacher notes contain stage keywords (English or Arabic), teacher can ONLY supervise those stages.
+    // If no stage keywords found in notes, teacher can supervise any stage (no restriction).
+    const canSuperviseStage = (teacher: Teacher, slotStage: string): boolean => {
+      if (!ruleNotes) return true;
+      if (!teacher.notes || teacher.notes.trim() === '') return true;
+      const n = teacher.notes.toLowerCase();
+      const allowed: string[] = [];
+      if (/\b(primary|pri)\b/i.test(n) || n.includes('\u0627\u0628\u062a\u062f\u0627\u0626\u064a')) allowed.push('primary');
+      if (/\bprep\b/i.test(n) || n.includes('\u0627\u0639\u062f\u0627\u062f\u064a')) allowed.push('prep');
+      if (/\b(secondary|sec)\b/i.test(n) || n.includes('\u062b\u0627\u0646\u0648\u064a')) allowed.push('sec');
+      if (allowed.length === 0) return true; // No stage restrictions found
+      return allowed.includes(slotStage);
+    };
+
+    // ---- Helper: Consecutive-day same-grade check (variety constraint) ----
+    const wasSameGradeAdjacent = (tr: TrackingEntry, slot: Slot): boolean => {
       return tr.gradeHistory.some(h => Math.abs(h.dayIndex - slot.dayIndex) === 1 && h.grade === slot.grade);
     };
 
-    // ---- Helper: check stage notes matching ----
-    const stageMatchScore = (teacher: Teacher, slotStage: string): number => {
-      if (!ruleNotes || !teacher.notes || slotStage === 'any') return 0;
-      const n = teacher.notes.toLowerCase();
-      if (n.includes(slotStage)) return 2;
-      // Arabic aliases
-      if (slotStage === 'primary' && (n.includes('pri') || n.includes('ابتدائي'))) return 2;
-      if (slotStage === 'prep' && (n.includes('prep') || n.includes('اعدادي'))) return 2;
-      if (slotStage === 'sec' && (n.includes('sec') || n.includes('ثانوي'))) return 2;
-      return 0;
-    };
-
-    // ---- Helper: get effective hours (penalize admin so they get fewer) ----
-    const effectiveHours = (t: Teacher, tr: TrackingEntry): number => {
-      return t.subject === 'Admin' ? tr.totalHours * 1.5 + 2 : tr.totalHours;
-    };
-
-    // ---- Core: find best teacher for a slot ----
-    const findTeacher = (blockedId: string | null, slot: typeof allSlots[0], preferAdmin: boolean, relaxDayLimit: boolean): Teacher | null => {
-      const pool = preferAdmin ? adminTeachers : subjectTeachers;
-      const candidates: { teacher: Teacher; score: number; hours: number; rand: number }[] = [];
-
+    // ---- Core: Find best teacher for a slot ----
+    // Scoring: fewer hours + fewer committees + random noise = better candidate (lower score wins)
+    const findBest = (
+      blockedId: string | null,
+      slot: Slot,
+      pool: Teacher[],
+      relaxDay: boolean,
+      relaxAdj: boolean
+    ): Teacher | null => {
+      const candidates: { teacher: Teacher; score: number }[] = [];
       for (const t of pool) {
         if (blockedId && t.id === blockedId) continue;
         const tr = tracking[t.id];
-
-        // RULE 1: Never supervise own subject
+        // HARD RULE 1: No own-subject supervision
         if (ruleSubject && slot.subject && t.subject === slot.subject) continue;
-
-        // RULE 2: No time overlap on same day
+        // HARD RULE 2: Stage notes filtering (teacher can only go to allowed stages)
+        if (!canSuperviseStage(t, slot.stage)) continue;
+        // HARD RULE 3: No time overlap on same day
         if (tr.assignedSlots.some(s => s.day === slot.day && !(slot.timeInfo.end <= s.start || slot.timeInfo.start >= s.end))) continue;
-
-        // RULE 3: Max 1 duty per day (strict) — relaxed only in emergency
-        if (!relaxDayLimit && ruleDayLimit && tr.dayComm[slot.day] >= 1) continue;
-        if (relaxDayLimit && tr.dayComm[slot.day] >= 2) continue; // absolute max 2
-
-        // RULE 4: Max 5 hours per day
-        let todayH = 0;
-        const seenT = new Set<string>();
-        tr.assignedSlots.filter(s => s.day === slot.day).forEach(s => {
-          const k = s.start + '_' + s.end;
-          if (!seenT.has(k)) { seenT.add(k); todayH += (s.end - s.start) / 60; }
-        });
-        if (todayH + slot.timeInfo.duration > 5) continue;
-
-        // RULE 5: No same grade on adjacent days (variety)
-        if (wasSameGradeOnAdjacentDay(tr, slot)) continue;
-
-        // RULE 6: Stage notes matching
-        const sm = stageMatchScore(t, slot.stage);
-
-        // Scoring: lower = better candidate (least loaded + best stage match)
-        const effH = effectiveHours(t, tr);
-        const score = tr.totalComm * 100 + effH * 10 - sm * 50;
-
-        candidates.push({ teacher: t, score, hours: tr.totalHours, rand: Math.random() });
+        // HARD RULE 4: Max duties per day (1 strict, 2 only in extreme shortage)
+        if (!relaxDay && ruleDayLimit && tr.dayComm[slot.day] >= 1) continue;
+        if (relaxDay && tr.dayComm[slot.day] >= 2) continue;
+        // HARD RULE 5: No same grade on consecutive days (variety)
+        if (!relaxAdj && wasSameGradeAdjacent(tr, slot)) continue;
+        // Score: lower = better candidate (prefer teachers with fewer hours/committees)
+        const score = tr.totalHours * 10 + tr.totalComm * 5 + Math.random() * 3;
+        candidates.push({ teacher: t, score });
       }
-
       if (candidates.length === 0) return null;
-
-      // Sort by score ascending (least loaded first), randomize ties
-      candidates.sort((a, b) => {
-        if (Math.abs(a.score - b.score) < 1) return a.rand - b.rand; // randomize near-equal
-        return a.score - b.score;
-      });
-
-      // Pick from top group (within 1 committee of best) for more randomness
+      candidates.sort((a, b) => a.score - b.score);
+      // Pick from top candidates (within threshold) for more randomness
       const best = candidates[0].score;
-      const topGroup = candidates.filter(c => c.score <= best + 100);
+      const topGroup = candidates.filter(c => c.score <= best + 5);
       return topGroup[Math.floor(Math.random() * topGroup.length)].teacher;
     };
 
-    // ---- Run distribution ----
+    // ---- Run distribution with priority fallback chain ----
     let standbyCount = 0;
 
     allSlots.forEach(slot => {
-      // Priority 1: Subject teacher (strict rules)
-      let t1 = findTeacher(null, slot, false, false);
-      // Priority 2: Subject teacher (relax day limit if needed)
-      if (!t1) t1 = findTeacher(null, slot, false, true);
-      // Priority 3: Admin teacher (last resort)
-      if (!t1) { t1 = findTeacher(null, slot, true, false) || findTeacher(null, slot, true, true); }
+      let t1: Teacher | null = null;
+      let t2: Teacher | null = null;
+
+      // === Teacher 1: Subject teachers first (strict then relaxed), admin last resort ===
+      t1 = findBest(null, slot, subjectTeachers, false, false);
+      if (!t1) t1 = findBest(null, slot, subjectTeachers, false, true);   // relax consecutive-day
+      if (!t1) t1 = findBest(null, slot, subjectTeachers, true, false);    // relax day-limit
+      if (!t1) t1 = findBest(null, slot, subjectTeachers, true, true);     // relax both
+      if (!t1) t1 = findBest(null, slot, adminTeachers, false, false);     // admin strict
+      if (!t1) t1 = findBest(null, slot, adminTeachers, false, true);      // admin relax consecutive
+      if (!t1) t1 = findBest(null, slot, adminTeachers, true, false);      // admin relax day-limit
+      if (!t1) t1 = findBest(null, slot, adminTeachers, true, true);       // admin relax both (absolute last)
 
       if (t1) {
         const tr = tracking[t1.id];
-        tr.totalComm++;
-        tr.dayComm[slot.day]++;
+        tr.totalComm++; tr.dayComm[slot.day]++;
         tr.totalHours += slot.timeInfo.duration;
         tr.assignedSlots.push({ day: slot.day, start: slot.timeInfo.start, end: slot.timeInfo.end });
         tr.gradeHistory.push({ dayIndex: slot.dayIndex, grade: slot.grade });
-      } else {
-        standbyCount++;
-      }
+      } else { standbyCount++; }
 
-      // Second supervisor
-      let t2 = findTeacher(t1?.id || null, slot, false, false);
-      if (!t2) t2 = findTeacher(t1?.id || null, slot, false, true);
-      if (!t2) { t2 = findTeacher(t1?.id || null, slot, true, false) || findTeacher(t1?.id || null, slot, true, true); }
+      // === Teacher 2: Same priority chain, blocked from being same as t1 ===
+      const blocked = t1?.id || null;
+      t2 = findBest(blocked, slot, subjectTeachers, false, false);
+      if (!t2) t2 = findBest(blocked, slot, subjectTeachers, false, true);
+      if (!t2) t2 = findBest(blocked, slot, subjectTeachers, true, false);
+      if (!t2) t2 = findBest(blocked, slot, subjectTeachers, true, true);
+      if (!t2) t2 = findBest(blocked, slot, adminTeachers, false, false);
+      if (!t2) t2 = findBest(blocked, slot, adminTeachers, false, true);
+      if (!t2) t2 = findBest(blocked, slot, adminTeachers, true, false);
+      if (!t2) t2 = findBest(blocked, slot, adminTeachers, true, true);
 
       if (t2) {
         const tr = tracking[t2.id];
-        tr.totalComm++;
-        tr.dayComm[slot.day]++;
+        tr.totalComm++; tr.dayComm[slot.day]++;
         tr.totalHours += slot.timeInfo.duration;
         tr.assignedSlots.push({ day: slot.day, start: slot.timeInfo.start, end: slot.timeInfo.end });
         tr.gradeHistory.push({ dayIndex: slot.dayIndex, grade: slot.grade });
-      } else {
-        standbyCount++;
-      }
+      } else { standbyCount++; }
 
+      // Record assignment in final structure
       const dayGroup = finalAssignments[slot.day];
-      const sessionGroup = dayGroup.find(s => s.grade === slot.grade && s.time === slot.time);
-      if (sessionGroup) {
-        sessionGroup.committees.push({
+      const session = dayGroup.find(s => s.grade === slot.grade && s.time === slot.time);
+      if (session) {
+        session.committees.push({
           serial: slot.comId,
           t1: t1 ? { id: t1.id, name: t1.name } : { id: null, name: 'Standby Monitor' },
           t2: t2 ? { id: t2.id, name: t2.name } : { id: null, name: 'Standby Monitor' }
@@ -589,24 +579,87 @@ export default function ExamSystem() {
       }
     });
 
-    // ---- Post-check: admin hours should be less than subject teachers ----
-    const subjectIds = new Set(subjectTeachers.map(t => t.id));
-    const adminIds = new Set(adminTeachers.map(t => t.id));
-    const avgSubjectHrs = subjectTeachers.length > 0
-      ? subjectTeachers.reduce((sum, t) => sum + (tracking[t.id]?.totalHours || 0), 0) / subjectTeachers.length
-      : 0;
+    // ---- Post-distribution verification (all constraints checked precisely) ----
+    const violations: string[] = [];
+    // V-Check 1: Own-subject supervision
+    if (ruleSubject) {
+      for (const day of DAYS) {
+        for (const sess of finalAssignments[day]) {
+          for (const c of sess.committees) {
+            [c.t1, c.t2].forEach(who => {
+              if (who.id) {
+                const tch = teachers.find(x => x.id === who.id);
+                if (tch && tch.subject === sess.subject) violations.push(`${tch.name} -> own subject (${sess.subject}) on ${day}`);
+              }
+            });
+          }
+        }
+      }
+    }
+    // V-Check 2: Time overlap (same teacher, same day, overlapping times)
+    for (const t of teachers) {
+      const tr = tracking[t.id];
+      for (let i = 0; i < tr.assignedSlots.length; i++) {
+        for (let j = i + 1; j < tr.assignedSlots.length; j++) {
+          const a = tr.assignedSlots[i], b = tr.assignedSlots[j];
+          if (a.day === b.day && !(a.end <= b.start || b.end <= a.start)) {
+            violations.push(`${t.name} -> time overlap on ${a.day}`);
+          }
+        }
+      }
+    }
+    // V-Check 3: Consecutive-day same grade
+    for (const t of teachers) {
+      const tr = tracking[t.id];
+      for (let i = 0; i < tr.gradeHistory.length; i++) {
+        for (let j = i + 1; j < tr.gradeHistory.length; j++) {
+          if (Math.abs(tr.gradeHistory[i].dayIndex - tr.gradeHistory[j].dayIndex) === 1 && tr.gradeHistory[i].grade === tr.gradeHistory[j].grade) {
+            violations.push(`${t.name} -> same grade (${tr.gradeHistory[i].grade}) on consecutive days`);
+          }
+        }
+      }
+    }
+    // V-Check 4: Stage notes compliance
+    if (ruleNotes) {
+      for (const day of DAYS) {
+        for (const sess of finalAssignments[day]) {
+          const stage = getStage(sess.grade);
+          for (const c of sess.committees) {
+            [c.t1, c.t2].forEach(who => {
+              if (who.id) {
+                const tch = teachers.find(x => x.id === who.id);
+                if (tch && !canSuperviseStage(tch, stage)) violations.push(`${tch.name} -> wrong stage (${stage}) notes="${tch.notes}" on ${day}`);
+              }
+            });
+          }
+        }
+      }
+    }
 
-    let msg = `Distribution complete!`;
-    if (standbyCount > 0) msg += ` (${standbyCount} Standby slots - need more teachers)`;
+    // ---- Build summary statistics ----
+    const allH = teachers.map(t => tracking[t.id]?.totalHours || 0);
+    const subH = subjectTeachers.map(t => tracking[t.id]?.totalHours || 0);
+    const admH = adminTeachers.map(t => tracking[t.id]?.totalHours || 0);
+    const avgAll = allH.length ? allH.reduce((a, b) => a + b, 0) / allH.length : 0;
+    const spread = allH.length ? Math.sqrt(allH.reduce((s, h) => s + (h - avgAll) ** 2, 0) / allH.length) : 0;
+    let msg = `Done! Avg: ${avgAll.toFixed(1)}h | Spread: ${spread.toFixed(1)} | Min: ${allH.length ? Math.min(...allH).toFixed(1) : 0}h | Max: ${allH.length ? Math.max(...allH).toFixed(1) : 0}h`;
     if (adminTeachers.length > 0) {
-      const avgAdminHrs = adminTeachers.reduce((sum, t) => sum + (tracking[t.id]?.totalHours || 0), 0) / adminTeachers.length;
-      msg += ` | Admin avg: ${avgAdminHrs.toFixed(1)}h vs Subject avg: ${avgSubjectHrs.toFixed(1)}h`;
+      const avgSub = subH.length ? subH.reduce((a, b) => a + b, 0) / subH.length : 0;
+      const avgAdm = admH.length ? admH.reduce((a, b) => a + b, 0) / admH.length : 0;
+      msg += ` | Admin avg: ${avgAdm.toFixed(1)}h vs Subject avg: ${avgSub.toFixed(1)}h`;
+    }
+    if (standbyCount > 0) msg += ` | ${standbyCount} standby`;
+    if (violations.length > 0) {
+      msg += ` | ${violations.length} violations (check console)`;
+      console.warn('[Distribution Verification] Violations found:', violations);
+    } else {
+      console.log('[Distribution Verification] All constraints passed!');
     }
 
     const newResults = { assignments: finalAssignments, tracking };
     setResults(newResults);
     fetch('/api/results', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: newResults }) });
-    showToast(msg, standbyCount > 0 ? 'error' : 'success');
+    showToast(msg, standbyCount > 0 || violations.length > 0 ? 'error' : 'success');
     setActivePage('results');
   };
 
