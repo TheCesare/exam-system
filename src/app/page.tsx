@@ -41,8 +41,13 @@ function parseTimeRange(tStr: string) {
     const toMinutes = (s: string) => { const p = s.split(':'); return (parseInt(p[0])||0)*60 + (parseInt(p[1])||0); };
     let start = toMinutes(parts[0]);
     let end = toMinutes(parts[1]);
+    // Fix common 12h format issue: "1:00" should be "13:00" if start < 300 (before 5am) and end > start
+    if (start < 300 && end > start + 120) start += 720;
     if (end <= start) end += 720;
-    return { start, end, duration: (end - start) / 60 };
+    let duration = (end - start) / 60;
+    // Sanity cap: no exam is longer than 5 hours
+    if (duration > 5) duration = 2.0; // fallback to standard
+    return { start, end, duration };
   } catch { return { start: 540, end: 630, duration: 1.5 }; }
 }
 
