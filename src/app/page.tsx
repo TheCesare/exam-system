@@ -192,7 +192,7 @@ export default function ExamSystem() {
         if (data && data.data) {
           const d = data.data;
           // v6+ results must have _version >= 6. Old results → discard.
-          if (!d._version || d._version < 6) {
+          if (!d._version || d._version < 7) {
             await fetch('/api/results', { method: 'DELETE' });
             setResults(null);
           } else {
@@ -552,6 +552,37 @@ export default function ExamSystem() {
       return topGroup[Math.floor(Math.random() * topGroup.length)].teacher;
     };
 
+    // ---- Fallback 2: Relax subject + stage constraints (keep 1-per-day + time) ----
+    const findBestRelaxed = (blockedId: string | null, slot: Slot, pool: Teacher[]): Teacher | null => {
+      const candidates: { teacher: Teacher; score: number }[] = [];
+      for (const t of pool) {
+        if (blockedId && t.id === blockedId) continue;
+        const tr = tracking[t.id];
+        if (tr.assignedSlots.some(s => s.day === slot.day && !(slot.timeInfo.end <= s.start || slot.timeInfo.start >= s.end))) continue;
+        if (ruleDayLimit && tr.dayComm[slot.day] >= 1) continue;
+        const score = tr.totalHours * 200 + tr.totalComm * 5 + Math.random() * 0.2;
+        candidates.push({ teacher: t, score });
+      }
+      if (candidates.length === 0) return null;
+      candidates.sort((a, b) => a.score - b.score);
+      return candidates[0].teacher;
+    };
+
+    // ---- Fallback 3: Allow 2nd assignment same day (only time overlap blocked) ----
+    const findBestForceDay = (blockedId: string | null, slot: Slot, pool: Teacher[]): Teacher | null => {
+      const candidates: { teacher: Teacher; score: number }[] = [];
+      for (const t of pool) {
+        if (blockedId && t.id === blockedId) continue;
+        const tr = tracking[t.id];
+        if (tr.assignedSlots.some(s => s.day === slot.day && !(slot.timeInfo.end <= s.start || slot.timeInfo.start >= s.end))) continue;
+        const score = tr.totalHours * 200 + tr.totalComm * 5 + (tr.dayComm[slot.day] || 0) * 50 + Math.random() * 0.2;
+        candidates.push({ teacher: t, score });
+      }
+      if (candidates.length === 0) return null;
+      candidates.sort((a, b) => a.score - b.score);
+      return candidates[0].teacher;
+    };
+
     // ---- Process each day chronologically, shuffle slots within day ----
     let standbyCount = 0;
     const allPool = [...teachers]; // ALL teachers including admin
@@ -564,9 +595,11 @@ export default function ExamSystem() {
         let t1: Teacher | null = null;
         let t2: Teacher | null = null;
 
-        // T1: strict constraints
+        // T1: strict → relax consecutive → relax subject+stage → allow 2nd same-day
         t1 = findBest(null, slot, allPool, false);
-        if (!t1) t1 = findBest(null, slot, allPool, true); // relax consecutive-day only
+        if (!t1) t1 = findBest(null, slot, allPool, true); // relax consecutive-day
+        if (!t1) t1 = findBestRelaxed(null, slot, allPool); // relax subject + stage
+        if (!t1) t1 = findBestForceDay(null, slot, allPool); // allow 2nd assignment same day
 
         if (t1) {
           const tr = tracking[t1.id];
@@ -575,10 +608,12 @@ export default function ExamSystem() {
           tr.gradeHistory.push({ dayIndex: slot.dayIndex, grade: slot.grade });
         } else { standbyCount++; }
 
-        // T2: same pool, blocked=T1, strict then relaxed
+        // T2: same pool, blocked=T1, cascade fallbacks
         const blocked = t1?.id || null;
         t2 = findBest(blocked, slot, allPool, false);
         if (!t2) t2 = findBest(blocked, slot, allPool, true);
+        if (!t2) t2 = findBestRelaxed(blocked, slot, allPool);
+        if (!t2) t2 = findBestForceDay(blocked, slot, allPool);
 
         if (t2) {
           if (t2.subject === 'Admin') {
@@ -596,8 +631,8 @@ export default function ExamSystem() {
         if (session) {
           session.committees.push({
             serial: slot.comId,
-            t1: t1 ? { id: t1.id, name: t1.name } : { id: null, name: 'Standby Monitor' },
-            t2: t2 ? { id: t2.id, name: t2.name } : { id: null, name: 'Standby Monitor' }
+            t1: t1 ? { id: t1.id, name: t1.name } : { id: null, name: '—' },
+            t2: t2 ? { id: t2.id, name: t2.name } : { id: null, name: '—' }
           });
         }
       }
@@ -844,20 +879,9 @@ export default function ExamSystem() {
         const picked = candidates.slice(0, STANDBY_PER_STAGE);
         standbys[day][stage] = picked.map(t => ({ id: t.id, name: t.name }));
 
-        // Update tracking for picked standby teachers
+        // Only track rotation count — do NOT update tracking (standby is informational)
         for (const s of picked) {
-          tracking[s.id].totalComm++;
-          tracking[s.id].dayComm[day] = (tracking[s.id].dayComm[day] || 0) + 1;
           teacherStandbyCount[s.id]++;
-
-          // Hours: use the longest session duration for this stage on this day
-          let maxDuration = 0;
-          for (const sess of stageSessions) {
-            const ti = parseTimeRange(sess.time || '9:00-10:30');
-            if (ti.duration > maxDuration) maxDuration = ti.duration;
-          }
-          if (maxDuration === 0) maxDuration = 1.5;
-          tracking[s.id].totalHours += maxDuration;
         }
       }
     }
@@ -921,7 +945,7 @@ export default function ExamSystem() {
     const allH = teachers.map(t => tracking[t.id]?.totalHours || 0);
     const avgAll = allH.length ? allH.reduce((a, b) => a + b, 0) / allH.length : 0;
     const spread = allH.length ? Math.sqrt(allH.reduce((s, h) => s + (h - avgAll) ** 2, 0) / allH.length) : 0;
-    let msg = `v6 | Avg: ${avgAll.toFixed(1)}h | Spread: ${spread.toFixed(1)} | Min: ${allH.length ? Math.min(...allH).toFixed(1) : 0}h | Max: ${allH.length ? Math.max(...allH).toFixed(1) : 0}h`;
+    let msg = `v7 | Avg: ${avgAll.toFixed(1)}h | Spread: ${spread.toFixed(1)} | Min: ${allH.length ? Math.min(...allH).toFixed(1) : 0}h | Max: ${allH.length ? Math.max(...allH).toFixed(1) : 0}h`;
     // Count total standby assigned
     const totalStandby = Object.values(standbys).reduce((a, daySt) => a + Object.values(daySt).reduce((b, stList) => b + stList.length, 0), 0);
     if (totalStandby > 0) msg += ` | ${totalStandby} standby (${STANDBY_PER_STAGE}/stage/day)`;
@@ -933,7 +957,7 @@ export default function ExamSystem() {
       console.log('[Distribution v4] All constraints passed!');
     }
 
-    const newResults: DistributionResults = { _version: 6, assignments: finalAssignments, standbys, tracking };
+    const newResults: DistributionResults = { _version: 7, assignments: finalAssignments, standbys, tracking };
     setResults(newResults);
     fetch('/api/results', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: newResults }) });
     showToast(msg, standbyCount > 0 || violations.length > 0 ? 'error' : 'success');
@@ -1427,7 +1451,7 @@ export default function ExamSystem() {
                 {/* Standby section */}
                 {hasStandby && (
                   <div style={{ marginTop: 12, background: 'rgba(245,158,11,0.06)', border: '1px solid rgba(245,158,11,0.2)', borderRadius: 10, padding: '12px 16px' }}>
-                    <div style={{ fontSize: 13, fontWeight: 700, color: '#f59e0b', marginBottom: 8 }}>📍 الاحتياطي / Standby Supervisors</div>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: '#f59e0b', marginBottom: 8 }}>📍 المدرسين المتاحين (احتياطي)</div>
                     {['primary', 'prep', 'sec'].map(stage => {
                       const stList = dayStandbys?.[stage] || [];
                       if (stList.length === 0) return null;
@@ -1458,12 +1482,11 @@ export default function ExamSystem() {
     const teacherStats: Record<string, {
       totalComm: number; totalHours: number;
       dayComm: Record<string, number>;
-      dayStandby: Record<string, boolean>;
       assignedSlots: {day:string;start:number;end:number}[];
     }> = {};
     teachers.forEach(t => {
-      teacherStats[t.id] = { totalComm: 0, totalHours: 0, dayComm: {} as Record<string,number>, dayStandby: {} as Record<string,boolean>, assignedSlots: [] };
-      DAYS.forEach(d => { teacherStats[t.id].dayComm[d] = 0; teacherStats[t.id].dayStandby[d] = false; });
+      teacherStats[t.id] = { totalComm: 0, totalHours: 0, dayComm: {} as Record<string,number>, assignedSlots: [] };
+      DAYS.forEach(d => { teacherStats[t.id].dayComm[d] = 0; });
     });
 
     for (const day of DAYS) {
@@ -1487,29 +1510,8 @@ export default function ExamSystem() {
       }
     }
 
-    // Count standby assignments in stats
-    if (results.standbys) {
-      for (const day of DAYS) {
-        const daySt = results.standbys[day] || {};
-        for (const stage of ['primary', 'prep', 'sec']) {
-          for (const s of (daySt[stage] || [])) {
-            const ts = teacherStats[s.id];
-            if (!ts) continue;
-            ts.totalComm++;
-            ts.dayStandby[day] = true; // mark as standby (not primary)
-            // Hours: use the longest session for this stage on this day
-            const stageSessions = (results.assignments[day] || []).filter(sess => getStage(sess.grade) === stage);
-            let maxDur = 0;
-            for (const sess of stageSessions) {
-              const ti = parseTimeRange(sess.time || '9:00-10:30');
-              if (ti.duration > maxDur) maxDur = ti.duration;
-            }
-            if (maxDur === 0) maxDur = 1.5;
-            ts.totalHours += maxDur;
-          }
-        }
-      }
-    }
+    // Count standby — informational only, no hours/committees added
+    // (standby is displayed separately in results, not counted in stats)
 
     // ---- Aggregate statistics ----
     let totalComAll = 0, totalHrsAll = 0, notUsedCount = 0;
@@ -1570,10 +1572,8 @@ export default function ExamSystem() {
                       <td><span className="badge badge-blue">{t.subject}</span></td>
                       {DAYS.map(d => {
                         const val = ts.dayComm[d] || 0;
-                        const isStandby = ts.dayStandby[d];
-                        const cellColor = val >= 2 ? 'var(--danger)' : isStandby ? '#f59e0b' : val === 1 ? 'var(--accent3)' : 'var(--text2)';
-                        const cellText = isStandby ? 'S' : (val || '-');
-                        return <td key={d} style={{ textAlign: 'center', fontWeight: 600, color: cellColor, fontSize: isStandby ? 11 : undefined }}>{cellText}</td>;
+                        const cellColor = val >= 2 ? 'var(--danger)' : val === 1 ? 'var(--accent3)' : 'var(--text2)';
+                        return <td key={d} style={{ textAlign: 'center', fontWeight: 600, color: cellColor }}>{val || '-'}</td>;
                       })}
                       <td style={{ textAlign: 'center', fontWeight: 700, color: 'var(--accent)', fontFamily: 'var(--mono)' }}>{ts.totalComm}</td>
                       <td style={{ background: 'rgba(0,255,157,0.03)', padding: '8px 14px' }}>
