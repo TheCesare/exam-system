@@ -185,7 +185,7 @@ export default function ExamSystem() {
         if (data && data.data) {
           const d = data.data;
           // v4+ results must have _version >= 4. Old v3 results lack this → discard.
-          if (!d._version || d._version < 4) {
+          if (!d._version || d._version < 5) {
             await fetch('/api/results', { method: 'DELETE' });
             setResults(null);
           } else {
@@ -697,17 +697,100 @@ export default function ExamSystem() {
       }
     }
 
-    // ---- Recalculate hours again after admin swaps ----
-    teachers.forEach(t => {
-      const slots = tracking[t.id].assignedSlots || [];
-      const seen = new Set<string>();
-      let hrs = 0;
-      slots.forEach(s => {
-        const key = s.day + '_' + s.start + '_' + s.end;
-        if (!seen.has(key)) { seen.add(key); hrs += (s.end - s.start) / 60; }
+    // ---- Post-distribution: BALANCE PASS ----
+    // Iteratively swap assignments from overburdened → underburdened teachers
+    // to minimize the max-min spread in hours
+    const BALANCE_ITERATIONS = 150;
+    const recalcHours = () => {
+      teachers.forEach(t => {
+        const slots = tracking[t.id].assignedSlots || [];
+        const seen = new Set<string>();
+        let hrs = 0;
+        slots.forEach(s => {
+          const key = s.day + '_' + s.start + '_' + s.end;
+          if (!seen.has(key)) { seen.add(key); hrs += (s.end - s.start) / 60; }
+        });
+        tracking[t.id].totalHours = hrs;
       });
-      tracking[t.id].totalHours = hrs;
-    });
+    };
+    recalcHours(); // recalc after admin swaps first
+
+    for (let iter = 0; iter < BALANCE_ITERATIONS; iter++) {
+      const active = teachers.filter(t => tracking[t.id].totalComm > 0);
+      if (active.length < 2) break;
+      const sorted = [...active].sort((a, b) => tracking[b.id].totalHours - tracking[a.id].totalHours);
+      const maxH = tracking[sorted[0].id].totalHours;
+      const minH = tracking[sorted[sorted.length - 1].id].totalHours;
+      if (maxH - minH <= 1.0) break; // spread ≤ 1h — good enough
+
+      let swapped = false;
+      // Try top-3 donors × bottom-3 recipients
+      for (let di = 0; di < Math.min(sorted.length, 3) && !swapped; di++) {
+        const donor = sorted[di];
+        // Don't strip admins below their minimum
+        const isDonorAdmin = donor.subject === 'Admin';
+        if (tracking[donor.id].totalComm <= 1) continue;
+        if (isDonorAdmin && tracking[donor.id].totalComm <= adminMinTarget) continue;
+
+        for (let ri = sorted.length - 1; ri >= Math.max(0, sorted.length - 3) && !swapped; ri--) {
+          const recip = sorted[ri];
+          if (donor.id === recip.id) continue;
+          if (tracking[donor.id].totalHours <= tracking[recip.id].totalHours + 0.3) continue;
+
+          // Try each day where donor has an assignment and recipient doesn't
+          for (const day of DAYS) {
+            if (swapped) break;
+            if ((tracking[donor.id].dayComm[day] || 0) === 0) continue;
+            if ((tracking[recip.id].dayComm[day] || 0) >= 1) continue;
+
+            const donorSlot = tracking[donor.id].assignedSlots.find(s => s.day === day);
+            if (!donorSlot) continue;
+
+            // Find the session matching donor's slot
+            for (const sess of finalAssignments[day]) {
+              if (swapped) break;
+              const sessTI = parseTimeRange(sess.time || '9:00-10:30');
+              if (donorSlot.start !== sessTI.start || donorSlot.end !== sessTI.end) continue;
+
+              // Check recipient constraints
+              if (ruleSubject && sess.subject && recip.subject === sess.subject) continue;
+              if (!canSuperviseStage(recip, getStage(sess.grade))) continue;
+              if (tracking[recip.id].assignedSlots.some(s => s.day === day && !(sessTI.end <= s.start || sessTI.start >= s.end))) continue;
+              if (wasSameGradeAdjacent(tracking[recip.id], { day, dayIndex: DAYS.indexOf(day), grade: sess.grade, stage: getStage(sess.grade), subject: sess.subject, time: sess.time, timeInfo: sessTI, comId: 0 })) continue;
+
+              // Find donor in this session's committees
+              for (const c of sess.committees) {
+                const isT1 = c.t1?.id === donor.id;
+                const isT2 = c.t2?.id === donor.id;
+                if (!isT1 && !isT2) continue;
+
+                // Execute swap
+                if (isT1) c.t1 = { id: recip.id, name: recip.name };
+                else c.t2 = { id: recip.id, name: recip.name };
+
+                tracking[donor.id].totalComm--;
+                tracking[donor.id].dayComm[day] = Math.max(0, (tracking[donor.id].dayComm[day] || 0) - 1);
+                tracking[donor.id].assignedSlots = tracking[donor.id].assignedSlots.filter(s => !(s.day === day && s.start === donorSlot.start && s.end === donorSlot.end));
+                tracking[donor.id].gradeHistory = tracking[donor.id].gradeHistory.filter(h => !(h.dayIndex === DAYS.indexOf(day) && h.grade === sess.grade));
+
+                tracking[recip.id].totalComm++;
+                tracking[recip.id].dayComm[day] = (tracking[recip.id].dayComm[day] || 0) + 1;
+                tracking[recip.id].assignedSlots.push({ day, start: sessTI.start, end: sessTI.end });
+                tracking[recip.id].gradeHistory.push({ dayIndex: DAYS.indexOf(day), grade: sess.grade });
+
+                swapped = true;
+                break;
+              }
+            }
+          }
+        }
+      }
+      if (!swapped) break; // no valid swap found
+      recalcHours(); // update hours after each swap
+    }
+
+    // Final hour recalculation after all balancing
+    recalcHours();
 
     // ---- Post-distribution verification ----
     const violations: string[] = [];
@@ -777,7 +860,7 @@ export default function ExamSystem() {
       console.log('[Distribution v4] All constraints passed!');
     }
 
-    const newResults = { _version: 4, assignments: finalAssignments, tracking };
+    const newResults = { _version: 5, assignments: finalAssignments, tracking };
     setResults(newResults);
     fetch('/api/results', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: newResults }) });
     showToast(msg, standbyCount > 0 || violations.length > 0 ? 'error' : 'success');
@@ -1351,7 +1434,7 @@ export default function ExamSystem() {
       <header>
         <div className="logo">
           <div className="logo-dot" />
-          EXAM · SUPERVISOR · EQUALIZER · v10
+          EXAM · SUPERVISOR · EQUALIZER · v11
         </div>
         <div className="header-actions">
           <span className="badge" style={{ background: `${roleColor}22`, color: roleColor }}>{roleLabel}</span>
