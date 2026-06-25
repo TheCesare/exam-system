@@ -17,6 +17,17 @@ export async function GET() {
   }
 }
 
+export async function DELETE() {
+  try {
+    await supabase.from('distribution_results').delete()
+      .neq('id', '00000000-0000-0000-0000-000000000000')
+      .neq('id', 'a0000000-a000-a000-a000-a00000000000')
+    return NextResponse.json({ success: true })
+  } catch {
+    return NextResponse.json({ error: 'Failed' }, { status: 500 })
+  }
+}
+
 export async function POST(request: Request) {
   try {
     const { data } = await request.json()

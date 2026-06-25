@@ -177,7 +177,16 @@ export default function ExamSystem() {
       const res = await fetch('/api/results');
       if (res.ok) {
         const data = await res.json();
-        if (data && data.data) setResults(data.data);
+        if (data && data.data) {
+          const d = data.data;
+          // v4+ results must have _version >= 4. Old v3 results lack this → discard.
+          if (!d._version || d._version < 4) {
+            await fetch('/api/results', { method: 'DELETE' });
+            setResults(null);
+          } else {
+            setResults(d);
+          }
+        }
       }
     } catch { /* silent */ }
   }, []);
@@ -763,7 +772,7 @@ export default function ExamSystem() {
       console.log('[Distribution v4] All constraints passed!');
     }
 
-    const newResults = { assignments: finalAssignments, tracking };
+    const newResults = { _version: 4, assignments: finalAssignments, tracking };
     setResults(newResults);
     fetch('/api/results', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: newResults }) });
     showToast(msg, standbyCount > 0 || violations.length > 0 ? 'error' : 'success');
