@@ -25,7 +25,7 @@ const DEFAULT_TIMES: Record<string,string> = {
 // ========== TYPES ==========
 interface Teacher { id: string; name: string; subject: string; notes: string; }
 interface ScheduleCell { id?: string; grade: string; day: string; committees: number; subject: string; time: string; }
-interface TrackingEntry { totalComm: number; totalHours: number; dayComm: Record<string,number>; assignedSlots: {day:string;start:number;end:number}[]; }
+interface TrackingEntry { totalComm: number; totalHours: number; dayComm: Record<string,number>; assignedSlots: {day:string;start:number;end:number}[]; gradeHistory: {dayIndex:number;grade:string}[]; }
 interface CommitteeResult { serial: number; t1: {id:string|null;name:string}; t2: {id:string|null;name:string}; }
 interface SessionResult { grade: string; time: string; subject: string; committees: CommitteeResult[]; }
 
@@ -412,7 +412,7 @@ export default function ExamSystem() {
     } catch { /* silent */ }
   };
 
-  // ========== DISTRIBUTION ENGINE ==========
+  // ========== DISTRIBUTION ENGINE v2 ==========
   const runDistribution = () => {
     if (teachers.length === 0) { showToast('Error: Registry empty!', 'error'); return; }
 
@@ -420,27 +420,35 @@ export default function ExamSystem() {
     const ruleDayLimit = (document.getElementById('rule-daylimit') as HTMLInputElement)?.checked ?? true;
     const ruleNotes = (document.getElementById('rule-notes') as HTMLInputElement)?.checked ?? true;
 
+    // Separate: subject teachers first, Admin teachers as last-resort fillers
+    const subjectTeachers = teachers.filter(t => t.subject !== 'Admin');
+    const adminTeachers = teachers.filter(t => t.subject === 'Admin');
+
+    // Initialize tracking with grade history for consecutive-day rule
     const tracking: Record<string, TrackingEntry> = {};
     teachers.forEach(t => {
-      tracking[t.id] = { totalComm: 0, totalHours: 0, dayComm: {} as Record<string,number>, assignedSlots: [] };
+      tracking[t.id] = { totalComm: 0, totalHours: 0, dayComm: {} as Record<string,number>, assignedSlots: [], gradeHistory: [] };
       DAYS.forEach(d => { tracking[t.id].dayComm[d] = 0; });
     });
 
-    const allSlots: { day: string; grade: string; stage: string; subject: string; time: string; timeInfo: ReturnType<typeof parseTimeRange>; comId: number }[] = [];
-    DAYS.forEach(day => {
+    // Build all slots from schedule
+    const allSlots: { day: string; dayIndex: number; grade: string; stage: string; subject: string; time: string; timeInfo: ReturnType<typeof parseTimeRange>; comId: number }[] = [];
+    DAYS.forEach((day, dayIndex) => {
       GRADES.forEach(grade => {
         const cell = scheduleBuffer[`${grade}__${day}`];
         if (cell && cell.committees > 0) {
           const timeInfo = parseTimeRange(cell.time || DEFAULT_TIMES[grade] || '9:00-10:30');
           for (let c = 1; c <= cell.committees; c++) {
-            allSlots.push({ day, grade, stage: getStage(grade), subject: cell.subject || '', time: cell.time || DEFAULT_TIMES[grade] || '9:00-10:30', timeInfo, comId: c });
+            allSlots.push({ day, dayIndex, grade, stage: getStage(grade), subject: cell.subject || '', time: cell.time || DEFAULT_TIMES[grade] || '9:00-10:30', timeInfo, comId: c });
           }
         }
       });
     });
 
+    // Sort by duration descending (longest sessions first = better balance)
     allSlots.sort((a, b) => b.timeInfo.duration - a.timeInfo.duration);
 
+    // Build final assignments structure
     const finalAssignments: Record<string, SessionResult[]> = {};
     DAYS.forEach(d => { finalAssignments[d] = []; });
     DAYS.forEach(day => {
@@ -455,50 +463,119 @@ export default function ExamSystem() {
       });
     });
 
-    const findTeacher = (blockedId: string | null, slot: typeof allSlots[0], relaxDay: boolean = false): Teacher | null => {
-      let pool: { teacher: Teacher; matchScore: number; totalComm: number; totalHours: number }[] = [];
-      teachers.forEach(t => {
-        if (blockedId && t.id === blockedId) return;
-        const tr = tracking[t.id];
-        if (ruleSubject && slot.subject && t.subject === slot.subject) return;
-        const hasOverlap = tr.assignedSlots.some(s => s.day === slot.day && !(slot.timeInfo.end <= s.start || slot.timeInfo.start >= s.end));
-        if (hasOverlap) return;
-        if (!relaxDay && ruleDayLimit && tr.dayComm[slot.day] >= 1) return;
-        let todayHours = 0;
-        const seen = new Set<string>();
-        tr.assignedSlots.filter(s => s.day === slot.day).forEach(s => {
-          const k = s.start + '_' + s.end;
-          if (!seen.has(k)) { seen.add(k); todayHours += (s.end - s.start) / 60; }
-        });
-        if (todayHours + slot.timeInfo.duration > 5) return;
-        let matchScore = 0;
-        if (ruleNotes && t.notes && slot.stage !== 'any' && t.notes.toLowerCase().includes(slot.stage)) matchScore = 1;
-        pool.push({ teacher: t, matchScore, totalComm: tr.totalComm, totalHours: tr.totalHours });
-      });
-      if (pool.length === 0) return null;
-      pool.sort((a, b) => {
-        if (a.totalComm !== b.totalComm) return a.totalComm - b.totalComm;
-        if (Math.abs(a.totalHours - b.totalHours) > 0.001) return a.totalHours - b.totalHours;
-        if (b.matchScore !== a.matchScore) return b.matchScore - a.matchScore;
-        return a.teacher.id.localeCompare(b.teacher.id);
-      });
-      return pool[0].teacher;
+    // ---- Helper: check consecutive-day rule ----
+    const wasSameGradeOnAdjacentDay = (tr: TrackingEntry, slot: typeof allSlots[0]): boolean => {
+      return tr.gradeHistory.some(h => Math.abs(h.dayIndex - slot.dayIndex) === 1 && h.grade === slot.grade);
     };
 
-    allSlots.forEach(slot => {
-      const t1 = findTeacher(null, slot, false) || findTeacher(null, slot, true);
-      if (t1) {
-        tracking[t1.id].totalComm++;
-        tracking[t1.id].dayComm[slot.day]++;
-        tracking[t1.id].totalHours += slot.timeInfo.duration;
-        tracking[t1.id].assignedSlots.push({ day: slot.day, start: slot.timeInfo.start, end: slot.timeInfo.end });
+    // ---- Helper: check stage notes matching ----
+    const stageMatchScore = (teacher: Teacher, slotStage: string): number => {
+      if (!ruleNotes || !teacher.notes || slotStage === 'any') return 0;
+      const n = teacher.notes.toLowerCase();
+      if (n.includes(slotStage)) return 2;
+      // Arabic aliases
+      if (slotStage === 'primary' && (n.includes('pri') || n.includes('ابتدائي'))) return 2;
+      if (slotStage === 'prep' && (n.includes('prep') || n.includes('اعدادي'))) return 2;
+      if (slotStage === 'sec' && (n.includes('sec') || n.includes('ثانوي'))) return 2;
+      return 0;
+    };
+
+    // ---- Helper: get effective hours (penalize admin so they get fewer) ----
+    const effectiveHours = (t: Teacher, tr: TrackingEntry): number => {
+      return t.subject === 'Admin' ? tr.totalHours * 1.5 + 2 : tr.totalHours;
+    };
+
+    // ---- Core: find best teacher for a slot ----
+    const findTeacher = (blockedId: string | null, slot: typeof allSlots[0], preferAdmin: boolean, relaxDayLimit: boolean): Teacher | null => {
+      const pool = preferAdmin ? adminTeachers : subjectTeachers;
+      const candidates: { teacher: Teacher; score: number; hours: number; rand: number }[] = [];
+
+      for (const t of pool) {
+        if (blockedId && t.id === blockedId) continue;
+        const tr = tracking[t.id];
+
+        // RULE 1: Never supervise own subject
+        if (ruleSubject && slot.subject && t.subject === slot.subject) continue;
+
+        // RULE 2: No time overlap on same day
+        if (tr.assignedSlots.some(s => s.day === slot.day && !(slot.timeInfo.end <= s.start || slot.timeInfo.start >= s.end))) continue;
+
+        // RULE 3: Max 1 duty per day (strict) — relaxed only in emergency
+        if (!relaxDayLimit && ruleDayLimit && tr.dayComm[slot.day] >= 1) continue;
+        if (relaxDayLimit && tr.dayComm[slot.day] >= 2) continue; // absolute max 2
+
+        // RULE 4: Max 5 hours per day
+        let todayH = 0;
+        const seenT = new Set<string>();
+        tr.assignedSlots.filter(s => s.day === slot.day).forEach(s => {
+          const k = s.start + '_' + s.end;
+          if (!seenT.has(k)) { seenT.add(k); todayH += (s.end - s.start) / 60; }
+        });
+        if (todayH + slot.timeInfo.duration > 5) continue;
+
+        // RULE 5: No same grade on adjacent days (variety)
+        if (wasSameGradeOnAdjacentDay(tr, slot)) continue;
+
+        // RULE 6: Stage notes matching
+        const sm = stageMatchScore(t, slot.stage);
+
+        // Scoring: lower = better candidate (least loaded + best stage match)
+        const effH = effectiveHours(t, tr);
+        const score = tr.totalComm * 100 + effH * 10 - sm * 50;
+
+        candidates.push({ teacher: t, score, hours: tr.totalHours, rand: Math.random() });
       }
-      const t2 = findTeacher(t1?.id || null, slot, false) || findTeacher(t1?.id || null, slot, true);
+
+      if (candidates.length === 0) return null;
+
+      // Sort by score ascending (least loaded first), randomize ties
+      candidates.sort((a, b) => {
+        if (Math.abs(a.score - b.score) < 1) return a.rand - b.rand; // randomize near-equal
+        return a.score - b.score;
+      });
+
+      // Pick from top group (within 1 committee of best) for more randomness
+      const best = candidates[0].score;
+      const topGroup = candidates.filter(c => c.score <= best + 100);
+      return topGroup[Math.floor(Math.random() * topGroup.length)].teacher;
+    };
+
+    // ---- Run distribution ----
+    let standbyCount = 0;
+
+    allSlots.forEach(slot => {
+      // Priority 1: Subject teacher (strict rules)
+      let t1 = findTeacher(null, slot, false, false);
+      // Priority 2: Subject teacher (relax day limit if needed)
+      if (!t1) t1 = findTeacher(null, slot, false, true);
+      // Priority 3: Admin teacher (last resort)
+      if (!t1) { t1 = findTeacher(null, slot, true, false) || findTeacher(null, slot, true, true); }
+
+      if (t1) {
+        const tr = tracking[t1.id];
+        tr.totalComm++;
+        tr.dayComm[slot.day]++;
+        tr.totalHours += slot.timeInfo.duration;
+        tr.assignedSlots.push({ day: slot.day, start: slot.timeInfo.start, end: slot.timeInfo.end });
+        tr.gradeHistory.push({ dayIndex: slot.dayIndex, grade: slot.grade });
+      } else {
+        standbyCount++;
+      }
+
+      // Second supervisor
+      let t2 = findTeacher(t1?.id || null, slot, false, false);
+      if (!t2) t2 = findTeacher(t1?.id || null, slot, false, true);
+      if (!t2) { t2 = findTeacher(t1?.id || null, slot, true, false) || findTeacher(t1?.id || null, slot, true, true); }
+
       if (t2) {
-        tracking[t2.id].totalComm++;
-        tracking[t2.id].dayComm[slot.day]++;
-        tracking[t2.id].totalHours += slot.timeInfo.duration;
-        tracking[t2.id].assignedSlots.push({ day: slot.day, start: slot.timeInfo.start, end: slot.timeInfo.end });
+        const tr = tracking[t2.id];
+        tr.totalComm++;
+        tr.dayComm[slot.day]++;
+        tr.totalHours += slot.timeInfo.duration;
+        tr.assignedSlots.push({ day: slot.day, start: slot.timeInfo.start, end: slot.timeInfo.end });
+        tr.gradeHistory.push({ dayIndex: slot.dayIndex, grade: slot.grade });
+      } else {
+        standbyCount++;
       }
 
       const dayGroup = finalAssignments[slot.day];
@@ -512,11 +589,24 @@ export default function ExamSystem() {
       }
     });
 
+    // ---- Post-check: admin hours should be less than subject teachers ----
+    const subjectIds = new Set(subjectTeachers.map(t => t.id));
+    const adminIds = new Set(adminTeachers.map(t => t.id));
+    const avgSubjectHrs = subjectTeachers.length > 0
+      ? subjectTeachers.reduce((sum, t) => sum + (tracking[t.id]?.totalHours || 0), 0) / subjectTeachers.length
+      : 0;
+
+    let msg = `Distribution complete!`;
+    if (standbyCount > 0) msg += ` (${standbyCount} Standby slots - need more teachers)`;
+    if (adminTeachers.length > 0) {
+      const avgAdminHrs = adminTeachers.reduce((sum, t) => sum + (tracking[t.id]?.totalHours || 0), 0) / adminTeachers.length;
+      msg += ` | Admin avg: ${avgAdminHrs.toFixed(1)}h vs Subject avg: ${avgSubjectHrs.toFixed(1)}h`;
+    }
+
     const newResults = { assignments: finalAssignments, tracking };
     setResults(newResults);
-
     fetch('/api/results', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: newResults }) });
-    showToast('Overlap Lock Secured! Schedules fully cleared. ✓', 'success');
+    showToast(msg, standbyCount > 0 ? 'error' : 'success');
     setActivePage('results');
   };
 
@@ -840,23 +930,30 @@ export default function ExamSystem() {
         <div className="stat-card"><span className="stat-number">{totalSlots}</span><div className="stat-label">Total Task Slots</div></div>
       </div>
       <div className="card">
-        <div className="card-title" style={{ marginBottom: 16 }}>Mathematical Distribution Engine Constraints</div>
+        <div className="card-title" style={{ marginBottom: 16 }}>Distribution Engine Rules</div>
         <div className="grid-2">
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
             <label style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, cursor: 'pointer' }}>
               <input type="checkbox" id="rule-subject" defaultChecked style={{ width: 16, height: 16, accentColor: 'var(--accent)' }} />
-              Block Specialty Subjects (Never supervise own exam)
+              No teacher supervises their own subject
             </label>
             <label style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, cursor: 'pointer' }}>
               <input type="checkbox" id="rule-daylimit" defaultChecked style={{ width: 16, height: 16, accentColor: 'var(--accent)' }} />
-              Enforce Hard Cap: **Strictly Max 1 Committee Per Day**
+              Max 1 duty per day (relaxed only if shortage)
             </label>
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
             <label style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, cursor: 'pointer' }}>
               <input type="checkbox" id="rule-notes" defaultChecked style={{ width: 16, height: 16, accentColor: 'var(--accent)' }} />
-              Match Stage Preferences Safely with Fallback (Eliminate Standby)
+              Respect Stage Notes (primary/prep/sec)
             </label>
+            <div style={{ fontSize: 11, color: 'var(--text2)', lineHeight: 1.6, padding: '4px 0' }}>
+              • Random distribution (different each run)<br/>
+              • Balanced hours across all teachers<br/>
+              • Admin teachers used last, get fewer hours<br/>
+              • No same grade on consecutive days<br/>
+              • No time overlap for same teacher
+            </div>
           </div>
         </div>
       </div>
