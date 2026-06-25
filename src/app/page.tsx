@@ -1434,7 +1434,7 @@ export default function ExamSystem() {
       <header>
         <div className="logo">
           <div className="logo-dot" />
-          EXAM · SUPERVISOR · EQUALIZER · v11
+          EXAM · SUPERVISOR · EQUALIZER · v10
         </div>
         <div className="header-actions">
           <span className="badge" style={{ background: `${roleColor}22`, color: roleColor }}>{roleLabel}</span>
