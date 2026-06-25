@@ -1028,15 +1028,20 @@ export default function ExamSystem() {
   };
 
   // ========== MAIN APP RENDER ==========
-  const pages: { key: Page; label: string; adminOnly: boolean }[] = [
+  const hasResults = !!results?.tracking;
+  const pages: { key: Page; label: string; adminOnly: boolean; requiresResults?: boolean }[] = [
     { key: 'teachers', label: '👨‍🏫 Teachers', adminOnly: false },
     { key: 'schedule', label: '📅 Schedule', adminOnly: false },
     { key: 'distribute', label: '⚡ Distribute', adminOnly: true },
     { key: 'results', label: '📋 Results', adminOnly: false },
-    { key: 'stats', label: '📊 Statistics Load Ledger', adminOnly: true },
+    { key: 'stats', label: '📊 Statistics Load Ledger', adminOnly: false, requiresResults: true },
   ];
 
-  const visiblePages = pages.filter(p => !p.adminOnly || isAdmin);
+  const visiblePages = pages.filter(p => {
+    if (p.adminOnly && !isAdmin) return false;
+    if (p.requiresResults && !hasResults) return false;
+    return true;
+  });
 
   return (
     <div className="app">
