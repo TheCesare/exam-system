@@ -192,7 +192,7 @@ export default function ExamSystem() {
         if (data && data.data) {
           const d = data.data;
           // v6+ results must have _version >= 6. Old results → discard.
-          if (!d._version || d._version < 8) {
+          if (!d._version || d._version < 9) {
             await fetch('/api/results', { method: 'DELETE' });
             setResults(null);
           } else {
@@ -845,68 +845,70 @@ export default function ExamSystem() {
       }
     }
 
-    // ---- Post-distribution: STANDBY ASSIGNMENT ----
-    // 1 standby teacher per stage per day from unassigned teachers
-    // CRITICAL: Standby must NOT be the same subject as any exam that day for that stage
-    // Rotation: prefer teachers who weren't standby yesterday, fewest total standby days
-    const STAGES_LIST = ['primary', 'prep', 'sec'] as const;
-    const STANDBY_PER_STAGE = 1;
+    // ---- Post-distribution: STANDBY ASSIGNMENT (per-grade per-day) ----
+    // 1 standby per exam session (grade+day). Keyed by grade name, not stage.
+    // Candidate pool: teachers with NO committee that day, OR teachers whose committee is at a DIFFERENT time.
+    // CRITICAL: Standby must NOT be the same subject as the exam.
+    // Rotation: prefer teachers who weren't standby yesterday, fewest total standby days.
     const standbys: Record<string, Record<string, StandbyEntry[]>> = {};
-    DAYS.forEach(d => { standbys[d] = {}; STAGES_LIST.forEach(s => { standbys[d][s] = []; }); });
+    DAYS.forEach(d => { standbys[d] = {}; });
 
     // Track standby count per teacher for rotation fairness
     const teacherStandbyCount: Record<string, number> = {};
     teachers.forEach(t => { teacherStandbyCount[t.id] = 0; });
 
-    // Track which teachers are already standby for another stage today
-    const todayStandby: Record<string, Set<string>> = {};
-    DAYS.forEach(d => { todayStandby[d] = new Set(); });
-
     for (let di = 0; di < DAYS.length; di++) {
       const day = DAYS[di];
+      const daySessions = finalAssignments[day] || [];
+      if (daySessions.length === 0) continue;
 
-      for (const stage of STAGES_LIST) {
-        // Only assign standby if there are exams for this stage on this day
-        const stageSessions = (finalAssignments[day] || []).filter(s => getStage(s.grade) === stage);
-        if (stageSessions.length === 0) continue;
+      // Collect all grades that have exams today (to prevent duplicate standby for same teacher)
+      const todayStandbyTeachers = new Set<string>();
 
-        // Collect subjects being examined today for this stage
-        const dayStageSubjects = new Set<string>();
-        stageSessions.forEach(s => { if (s.subject) dayStageSubjects.add(s.subject); });
+      // Collect yesterday's standby IDs for rotation
+      const yesterdayStandby = new Set<string>();
+      if (di > 0) {
+        const prevDay = DAYS[di - 1];
+        const prevStandby = standbys[prevDay] || {};
+        Object.values(prevStandby).forEach(list => list.forEach(s => yesterdayStandby.add(s.id)));
+      }
 
-        // Find teachers NOT assigned on this day who can supervise this stage
-        // AND whose subject doesn't match any exam subject for this stage today
+      for (const sess of daySessions) {
+        if (sess.committees.length === 0) continue;
+        const stage = getStage(sess.grade);
+        const sessTimeInfo = parseTimeRange(sess.time || '9:00-10:30');
+
+        // Find candidates:
+        // 1. Teachers with NO committee that day, OR committee at a DIFFERENT time (no overlap)
+        // 2. Can supervise this stage
+        // 3. Not the same subject as this exam
+        // 4. Not already standby for another grade today
         let candidates = teachers.filter(t => {
-          if ((tracking[t.id].dayComm[day] || 0) >= 1) return false;
-          if (todayStandby[day].has(t.id)) return false; // already standby for another stage today
+          if (todayStandbyTeachers.has(t.id)) return false;
           if (!canSuperviseStage(t, stage)) return false;
-          // CRITICAL: Don't pick a teacher whose subject is being examined today
-          if (ruleSubject && t.subject && dayStageSubjects.has(t.subject)) return false;
+          // CRITICAL: Don't pick a teacher whose subject is being examined
+          if (ruleSubject && t.subject && sess.subject && t.subject === sess.subject) return false;
+          // Check time overlap: teacher must NOT have a committee at the SAME time
+          const hasOverlap = tracking[t.id].assignedSlots.some(s =>
+            s.day === day && !(sessTimeInfo.end <= s.start || sessTimeInfo.start >= s.end)
+          );
+          if (hasOverlap) return false;
           return true;
         });
 
-        // Rotation: deprioritize teachers who were standby YESTERDAY for ANY stage
-        const yesterdayStandby = new Set<string>();
-        if (di > 0) {
-          const prevDay = DAYS[di - 1];
-          for (const st of STAGES_LIST) {
-            (standbys[prevDay][st] || []).forEach(s => yesterdayStandby.add(s.id));
-          }
-        }
+        // Sort by rotation fairness: fewest standby days first, deprioritize yesterday's standby
         candidates.sort((a, b) => {
-          const aWasYesterday = yesterdayStandby.has(a.id) ? 100 : 0;
-          const bWasYesterday = yesterdayStandby.has(b.id) ? 100 : 0;
-          return (teacherStandbyCount[a.id] + aWasYesterday) - (teacherStandbyCount[b.id] + bWasYesterday);
+          const aY = yesterdayStandby.has(a.id) ? 100 : 0;
+          const bY = yesterdayStandby.has(b.id) ? 100 : 0;
+          return (teacherStandbyCount[a.id] + aY) - (teacherStandbyCount[b.id] + bY);
         });
 
-        // Pick up to STANDBY_PER_STAGE
-        const picked = candidates.slice(0, STANDBY_PER_STAGE);
-        standbys[day][stage] = picked.map(t => ({ id: t.id, name: t.name }));
-
-        // Track rotation count and mark as standby for today (so same teacher isn't picked for another stage)
-        for (const s of picked) {
-          teacherStandbyCount[s.id]++;
-          todayStandby[day].add(s.id);
+        // Pick 1 standby for this grade
+        if (candidates.length > 0) {
+          const picked = candidates[0];
+          standbys[day][sess.grade] = [{ id: picked.id, name: picked.name }];
+          teacherStandbyCount[picked.id]++;
+          todayStandbyTeachers.add(picked.id);
         }
       }
     }
@@ -970,19 +972,19 @@ export default function ExamSystem() {
     const allH = teachers.map(t => tracking[t.id]?.totalHours || 0);
     const avgAll = allH.length ? allH.reduce((a, b) => a + b, 0) / allH.length : 0;
     const spread = allH.length ? Math.sqrt(allH.reduce((s, h) => s + (h - avgAll) ** 2, 0) / allH.length) : 0;
-    let msg = `v8 | Avg: ${avgAll.toFixed(1)}h | Spread: ${spread.toFixed(1)} | Min: ${allH.length ? Math.min(...allH).toFixed(1) : 0}h | Max: ${allH.length ? Math.max(...allH).toFixed(1) : 0}h`;
+    let msg = `v9 | Avg: ${avgAll.toFixed(1)}h | Spread: ${spread.toFixed(1)} | Min: ${allH.length ? Math.min(...allH).toFixed(1) : 0}h | Max: ${allH.length ? Math.max(...allH).toFixed(1) : 0}h`;
     // Count total standby assigned
     const totalStandby = Object.values(standbys).reduce((a, daySt) => a + Object.values(daySt).reduce((b, stList) => b + stList.length, 0), 0);
-    if (totalStandby > 0) msg += ` | ${totalStandby} standby (${STANDBY_PER_STAGE}/stage/day)`;
+    if (totalStandby > 0) msg += ` | ${totalStandby} standby (per grade)`;
     if (standbyCount > 0) msg += ` | ${standbyCount} unfilled`;
     if (violations.length > 0) {
       msg += ` | ${violations.length} violations (check console)`;
-      console.warn('[Distribution v8] Violations:', violations);
+      console.warn('[Distribution v9] Violations:', violations);
     } else {
-      console.log('[Distribution v8] All constraints passed!');
+      console.log('[Distribution v9] All constraints passed!');
     }
 
-    const newResults: DistributionResults = { _version: 8, assignments: finalAssignments, standbys, tracking };
+    const newResults: DistributionResults = { _version: 9, assignments: finalAssignments, standbys, tracking };
     setResults(newResults);
     fetch('/api/results', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: newResults }) });
     showToast(msg, standbyCount > 0 || violations.length > 0 ? 'error' : 'success');
@@ -1001,10 +1003,9 @@ export default function ExamSystem() {
         });
       });
       if (results.standbys?.[day]) {
-        const STAGE_CSV: Record<string, string> = { primary: 'Primary', prep: 'Prep', sec: 'Secondary' };
-        for (const stage of ['primary', 'prep', 'sec']) {
-          for (const s of (results.standbys[day][stage] || [])) {
-            csv += `"${day}","${STAGE_CSV[stage]}","","","Standby","${s.name}","","Standby"\n`;
+        for (const [grade, stList] of Object.entries(results.standbys[day])) {
+          for (const s of stList) {
+            csv += `"${day}","${grade}","","","Standby","${s.name}","","Standby"\n`;
           }
         }
       }
@@ -1090,76 +1091,22 @@ export default function ExamSystem() {
           margin: { left: margin, right: margin }
         });
 
-        // Footer
+        // Footer + inline standby
         const finalY = (doc as any).lastAutoTable?.finalY || margin + 35 + 20;
-        doc.setFontSize(8);
-        doc.setTextColor(150);
-        doc.text('Exam Supervisor System - Auto Generated', pageW / 2, pageH - 10, { align: 'center' });
-      }
-
-      // Add standby page for this day (after all grades)
-      const daySt = results.standbys?.[day];
-      const hasDayStandby = daySt && Object.values(daySt).some(s => s.length > 0);
-      if (hasDayStandby) {
-        if (!firstPage) doc.addPage();
-        firstPage = false;
-
-        doc.setFontSize(16);
-        doc.setFont('helvetica', 'bold');
-        doc.text('Standby Supervisors', pageW / 2, margin + 5, { align: 'center' });
-
-        doc.setFontSize(11);
-        doc.setFont('helvetica', 'normal');
-        doc.text(`Day: ${day}`, margin, margin + 18);
-
-        doc.setDrawColor(100);
-        doc.line(margin, margin + 22, pageW - margin, margin + 22);
-
-        const STAGE_PDF: Record<string, string> = { primary: 'Primary Stage', prep: 'Prep Stage', sec: 'Secondary Stage' };
-        const standbyBody: string[][] = [];
-        for (const stage of ['primary', 'prep', 'sec']) {
-          const list = daySt[stage] || [];
-          if (list.length === 0) continue;
-          list.forEach((s, i) => {
-            standbyBody.push([i === 0 ? STAGE_PDF[stage] : '', s.name, '', '']);
-          });
+        const sessStandby = results.standbys?.[day]?.[session.grade] || [];
+        if (sessStandby.length > 0) {
+          doc.setFontSize(10);
+          doc.setFont('helvetica', 'bold');
+          doc.setTextColor(180, 120, 20);
+          doc.text('Standby: ' + sessStandby.map(s => s.name).join(', '), margin, finalY + 12);
+          doc.setTextColor(0);
         }
-
-        autoTable(doc, {
-          startY: margin + 28,
-          head: [['Stage', 'Standby Supervisor', 'Signature', 'Notes']],
-          body: standbyBody,
-          theme: 'grid',
-          styles: { fontSize: 10, cellPadding: 3, halign: 'center' },
-          headStyles: { fillColor: [180, 120, 20], textColor: 255, fontStyle: 'bold', halign: 'center' },
-          columnStyles: {
-            0: { cellWidth: 40, halign: 'left' },
-            1: { cellWidth: 55, halign: 'left' },
-            2: { cellWidth: 35 },
-            3: { cellWidth: 40 },
-          },
-          didDrawCell: (data) => {
-            if (data.column.index === 2 && data.section === 'body') {
-              const x = data.cell.x + 2;
-              const y = data.cell.y + 2;
-              const w = data.cell.width - 4;
-              const h = data.cell.height - 4;
-              doc.setDrawColor(150);
-              doc.setLineWidth(0.3);
-              doc.rect(x, y, w, h);
-              doc.setFontSize(7);
-              doc.setTextColor(150);
-              doc.text('Signature', data.cell.x + data.cell.width / 2, data.cell.y + data.cell.height - 1, { align: 'center' });
-              doc.setTextColor(0);
-            }
-          },
-          margin: { left: margin, right: margin }
-        });
-
         doc.setFontSize(8);
         doc.setTextColor(150);
         doc.text('Exam Supervisor System - Auto Generated', pageW / 2, pageH - 10, { align: 'center' });
       }
+
+      // Standby now shown inline per grade (see above)
     }
 
     if (firstPage) {
@@ -1421,9 +1368,6 @@ export default function ExamSystem() {
   const renderResultsPage = () => {
     if (!results?.assignments) return <div className="card"><div className="empty-state"><p>Execute the distribution engine to view results</p></div></div>;
 
-    const STAGE_LABELS: Record<string, string> = { primary: 'ابتدائي', prep: 'اعدادي', sec: 'ثانوي' };
-    const STAGE_COLORS: Record<string, string> = { primary: '#f59e0b', prep: '#8b5cf6', sec: '#06b6d4' };
-
     return (
       <div>
         <div style={{ marginBottom: 16, display: 'flex', gap: 10 }}>
@@ -1432,8 +1376,7 @@ export default function ExamSystem() {
         {DAYS.map(day => {
           const sessions = results.assignments[day] || [];
           const dayStandbys = results.standbys?.[day];
-          const hasStandby = dayStandbys && Object.values(dayStandbys).some(s => s.length > 0);
-          if (sessions.length === 0 && !hasStandby) return null;
+          if (sessions.length === 0) return null;
           return (
             <div key={day} className="result-day">
               <div className="result-day-header" onClick={() => {
@@ -1444,7 +1387,9 @@ export default function ExamSystem() {
                 <span>View Options ▼</span>
               </div>
               <div className="result-day-body" id={'day-body-' + day} style={{ display: 'block' }}>
-                {sessions.map((session, si) => (
+                {sessions.map((session, si) => {
+                  const sessStandby = dayStandbys?.[session.grade] || [];
+                  return (
                   <div key={si} className="result-session">
                     <div className="result-session-header">
                       <span className="rs-grade">{session.grade}</span>
@@ -1471,26 +1416,15 @@ export default function ExamSystem() {
                         </div>
                       );
                     })}
+                    {sessStandby.length > 0 && (
+                      <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 10, background: 'rgba(245,158,11,0.06)', border: '1px solid rgba(245,158,11,0.2)', borderRadius: 8, padding: '6px 14px' }}>
+                        <span style={{ fontSize: 12, fontWeight: 700, color: '#f59e0b' }}>📍 احتياطي:</span>
+                        {sessStandby.map((s, i) => <span key={s.id} style={{ fontSize: 13, color: 'var(--text)', fontWeight: 600 }}>{i > 0 && ' , '}{s.name}</span>)}
+                      </div>
+                    )}
                   </div>
-                ))}
-                {/* Standby section */}
-                {hasStandby && (
-                  <div style={{ marginTop: 12, background: 'rgba(245,158,11,0.06)', border: '1px solid rgba(245,158,11,0.2)', borderRadius: 10, padding: '12px 16px' }}>
-                    <div style={{ fontSize: 13, fontWeight: 700, color: '#f59e0b', marginBottom: 8 }}>📍 المدرسين المتاحين (احتياطي)</div>
-                    {['primary', 'prep', 'sec'].map(stage => {
-                      const stList = dayStandbys?.[stage] || [];
-                      if (stList.length === 0) return null;
-                      return (
-                        <div key={stage} style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
-                          <span style={{ fontSize: 12, fontWeight: 700, color: STAGE_COLORS[stage], background: `${STAGE_COLORS[stage]}18`, padding: '2px 10px', borderRadius: 6 }}>{STAGE_LABELS[stage]}</span>
-                          <span style={{ fontSize: 13, color: 'var(--text)' }}>
-                            {stList.map((s, i) => <span key={s.id}>{i > 0 && ' , '}{s.name}</span>)}
-                          </span>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
+                  );
+                })}
               </div>
             </div>
           );
