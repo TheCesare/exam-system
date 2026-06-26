@@ -8,7 +8,9 @@ import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 
 // ========== CONSTANTS ==========
-const DAYS = ['Saturday','Sunday','Monday','Tuesday','Wednesday','Thursday'];
+const WEEK1_DAYS = ['W1-Saturday','W1-Sunday','W1-Monday','W1-Tuesday','W1-Wednesday','W1-Thursday'];
+const WEEK2_DAYS = ['W2-Saturday','W2-Sunday','W2-Monday','W2-Tuesday','W2-Wednesday','W2-Thursday'];
+const DAYS = [...WEEK1_DAYS, ...WEEK2_DAYS];
 const GRADES = [
   'Grade 3 Primary','Grade 4 Primary','Grade 5 Primary','Grade 6 Primary',
   'Grade 1 Prep','Grade 2 Prep','Grade 1 Secondary','Grade 2 Secondary'
@@ -192,7 +194,7 @@ export default function ExamSystem() {
         if (data && data.data) {
           const d = data.data;
           // v6+ results must have _version >= 6. Old results → discard.
-          if (!d._version || d._version < 9) {
+          if (!d._version || d._version < 10) {
             await fetch('/api/results', { method: 'DELETE' });
             setResults(null);
           } else {
@@ -972,19 +974,19 @@ export default function ExamSystem() {
     const allH = teachers.map(t => tracking[t.id]?.totalHours || 0);
     const avgAll = allH.length ? allH.reduce((a, b) => a + b, 0) / allH.length : 0;
     const spread = allH.length ? Math.sqrt(allH.reduce((s, h) => s + (h - avgAll) ** 2, 0) / allH.length) : 0;
-    let msg = `v9 | Avg: ${avgAll.toFixed(1)}h | Spread: ${spread.toFixed(1)} | Min: ${allH.length ? Math.min(...allH).toFixed(1) : 0}h | Max: ${allH.length ? Math.max(...allH).toFixed(1) : 0}h`;
+    let msg = `v10 (2 weeks) | Avg: ${avgAll.toFixed(1)}h | Spread: ${spread.toFixed(1)} | Min: ${allH.length ? Math.min(...allH).toFixed(1) : 0}h | Max: ${allH.length ? Math.max(...allH).toFixed(1) : 0}h`;
     // Count total standby assigned
     const totalStandby = Object.values(standbys).reduce((a, daySt) => a + Object.values(daySt).reduce((b, stList) => b + stList.length, 0), 0);
     if (totalStandby > 0) msg += ` | ${totalStandby} standby (per grade)`;
     if (standbyCount > 0) msg += ` | ${standbyCount} unfilled`;
     if (violations.length > 0) {
       msg += ` | ${violations.length} violations (check console)`;
-      console.warn('[Distribution v9] Violations:', violations);
+      console.warn('[Distribution v10] Violations:', violations);
     } else {
-      console.log('[Distribution v9] All constraints passed!');
+      console.log('[Distribution v10] All constraints passed!');
     }
 
-    const newResults: DistributionResults = { _version: 9, assignments: finalAssignments, standbys, tracking };
+    const newResults: DistributionResults = { _version: 10, assignments: finalAssignments, standbys, tracking };
     setResults(newResults);
     fetch('/api/results', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: newResults }) });
     showToast(msg, standbyCount > 0 || violations.length > 0 ? 'error' : 'success');
@@ -999,7 +1001,7 @@ export default function ExamSystem() {
       const sessions = results.assignments[day] || [];
       sessions.forEach(s => {
         s.committees.forEach(c => {
-          csv += `"${day}","${s.grade}","${s.time}","${s.subject || ''}","Room ${c.serial}","${c.t1.name}","${c.t2.name}","Primary"\n`;
+          csv += `"${day.replace('W1-','Week 1 - ').replace('W2-','Week 2 - ')}","${s.grade}","${s.time}","${s.subject || ''}","Room ${c.serial}","${c.t1.name}","${c.t2.name}","Primary"\n`;
         });
       });
       if (results.standbys?.[day]) {
@@ -1039,7 +1041,7 @@ export default function ExamSystem() {
 
         doc.setFontSize(11);
         doc.setFont('helvetica', 'normal');
-        doc.text(`Day: ${day}`, margin, margin + 18);
+        doc.text(`Day: ${day.replace('W1-','Week 1 - ').replace('W2-','Week 2 - ')}`, margin, margin + 18);
         doc.text(`Grade: ${session.grade}`, margin + 80, margin + 18);
         doc.text(`Time: ${session.time}`, margin, margin + 26);
         doc.text(`Subject: ${session.subject || '-'}`, margin + 80, margin + 26);
@@ -1292,9 +1294,15 @@ export default function ExamSystem() {
         )}
       </div>
       <div className="table-wrap" style={{ maxHeight: '70vh', overflow: 'auto' }}>
+        {/* Week labels row */}
+        <div style={{ display: 'grid', gridTemplateColumns: '130px repeat(12, minmax(68px, 1fr))', gap: '3px', marginBottom: '2px' }}>
+          <div />
+          <div style={{ gridColumn: '2 / 8', textAlign: 'center', fontWeight: 700, color: 'var(--accent)', fontSize: 12, padding: '4px 0', borderBottom: '2px solid var(--accent)' }}>Week 1</div>
+          <div style={{ gridColumn: '8 / 14', textAlign: 'center', fontWeight: 700, color: 'var(--accent2)', fontSize: 12, padding: '4px 0', borderBottom: '2px solid var(--accent2)' }}>Week 2</div>
+        </div>
         <div className="schedule-grid">
-          <div className="sg-header">Grade Blueprint</div>
-          {DAYS.map(d => <div key={d} className="sg-header">{d}</div>)}
+          <div className="sg-header">Grade</div>
+          {DAYS.map(d => <div key={d} className="sg-header">{d.replace('W1-','').replace('W2-','')}</div>)}
 
           {GRADES.map(grade => (
             <React.Fragment key={grade}>
@@ -1346,10 +1354,11 @@ export default function ExamSystem() {
               Respect Stage Notes (primary/prep/sec)
             </label>
             <div style={{ fontSize: 11, color: 'var(--text2)', lineHeight: 1.6, padding: '4px 0' }}>
+              • 2-week schedule (12 exam days total)<br/>
               • Chronological day-by-day processing<br/>
               • MAX 1 committee per teacher per day (hard rule)<br/>
               • Admin participates normally (min 2 assignments)<br/>
-              • Hours balanced from actual assignments (no bugs)<br/>
+              • Hours balanced across BOTH weeks together<br/>
               • No same grade on consecutive days<br/>
               • No time overlap for same teacher
             </div>
@@ -1373,17 +1382,27 @@ export default function ExamSystem() {
         <div style={{ marginBottom: 16, display: 'flex', gap: 10 }}>
           <button className="btn btn-primary" onClick={exportPDF}>📄 Download PDF (A4 Printable)</button>
         </div>
-        {DAYS.map(day => {
+        {DAYS.map((day, di) => {
           const sessions = results.assignments[day] || [];
           const dayStandbys = results.standbys?.[day];
           if (sessions.length === 0) return null;
+          const isWeek2 = day.startsWith('W2-');
+          const displayDay = day.replace('W1-','').replace('W2-','');
+          // Insert week separator before first W2 day
+          const showWeek2Header = isWeek2 && (di === 0 || !DAYS[di - 1].startsWith('W2-'));
           return (
+            <React.Fragment key={day}>
+              {showWeek2Header && (
+                <div style={{ textAlign: 'center', padding: '12px 0 4px', fontWeight: 700, color: 'var(--accent2)', fontSize: 15, letterSpacing: 1, borderTop: '2px solid var(--accent2)', marginTop: 8 }}>
+                  ── Week 2 ──
+                </div>
+              )}
             <div key={day} className="result-day">
               <div className="result-day-header" onClick={() => {
                 const body = document.getElementById('day-body-' + day);
                 if (body) body.style.display = body.style.display === 'none' ? 'block' : 'none';
               }}>
-                <div className="result-day-title">📅 Day: {day} </div>
+                <div className="result-day-title">📅 {displayDay} {isWeek2 ? <span style={{ color: 'var(--accent2)', fontSize: 11 }}>(Week 2)</span> : ''}</div>
                 <span>View Options ▼</span>
               </div>
               <div className="result-day-body" id={'day-body-' + day} style={{ display: 'block' }}>
@@ -1427,6 +1446,7 @@ export default function ExamSystem() {
                 })}
               </div>
             </div>
+            </React.Fragment>
           );
         })}
       </div>
@@ -1506,7 +1526,7 @@ export default function ExamSystem() {
               <thead>
                 <tr>
                   <th>#</th><th>Teacher Name</th><th>Subject</th>
-                  {DAYS.map(d => <th key={d}>{d.slice(0, 3)}</th>)}
+                  {DAYS.map(d => <th key={d} style={d.startsWith('W2-') ? { borderLeft: '2px solid var(--accent2)' } : {}}>{d.replace('W1-','').replace('W2-','').slice(0, 3)}</th>)}
                   <th style={{ background: 'rgba(0,212,255,0.1)' }}>Total<br/>Committees</th>
                   <th style={{ background: 'rgba(0,255,157,0.1)', minWidth: 100 }}>Total<br/>Hours</th>
                   <th>Status</th>
@@ -1532,7 +1552,7 @@ export default function ExamSystem() {
                       {DAYS.map(d => {
                         const val = ts.dayComm[d] || 0;
                         const cellColor = val >= 2 ? 'var(--danger)' : val === 1 ? 'var(--accent3)' : 'var(--text2)';
-                        return <td key={d} style={{ textAlign: 'center', fontWeight: 600, color: cellColor }}>{val || '-'}</td>;
+                        return <td key={d} style={{ textAlign: 'center', fontWeight: 600, color: cellColor, fontSize: 11, padding: '4px 2px', ...(d.startsWith('W2-') ? { borderLeft: '2px solid var(--accent2)' } : {}) }}>{val || '-'}</td>;
                       })}
                       <td style={{ textAlign: 'center', fontWeight: 700, color: 'var(--accent)', fontFamily: 'var(--mono)' }}>{ts.totalComm}</td>
                       <td style={{ background: 'rgba(0,255,157,0.03)', padding: '8px 14px' }}>
@@ -1551,7 +1571,7 @@ export default function ExamSystem() {
                   <td colSpan={3} style={{ color: 'var(--accent)', fontWeight: 700 }}>TOTAL</td>
                   {DAYS.map(d => {
                     const dayTotal = teachers.reduce((a, t) => a + teacherStats[t.id].dayComm[d], 0);
-                    return <td key={d} style={{ textAlign: 'center', color: 'var(--accent)' }}>{dayTotal}</td>;
+                    return <td key={d} style={{ textAlign: 'center', color: 'var(--accent)', fontSize: 11, ...(d.startsWith('W2-') ? { borderLeft: '2px solid var(--accent2)' } : {}) }}>{dayTotal}</td>;
                   })}
                   <td style={{ textAlign: 'center', color: 'var(--accent)', fontFamily: 'var(--mono)' }}>{totalComAll}</td>
                   <td style={{ fontFamily: 'var(--mono)', fontWeight: 700, color: 'var(--accent3)', padding: '8px 14px' }}>{totalHrsAll.toFixed(1)}h</td>

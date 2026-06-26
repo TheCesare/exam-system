@@ -302,39 +302,48 @@ tbody td {
 .del-btn { color: var(--danger); }
 .edit-btn { color: var(--accent); margin-right: 6px; }
 
-/* ========== SCHEDULE GRID ========== */
+/* ========== SCHEDULE GRID (2 WEEKS) ========== */
 .schedule-grid {
   display: grid;
-  grid-template-columns: 160px repeat(6, 1fr);
-  gap: 4px;
-  font-size: 12px;
+  grid-template-columns: 130px repeat(12, minmax(68px, 1fr));
+  gap: 3px;
+  font-size: 11px;
 }
 
 .sg-header {
   background: var(--surface2);
-  padding: 10px 8px;
+  padding: 8px 4px;
   text-align: center;
   font-weight: 600;
   color: var(--accent);
-  border-radius: 6px;
+  border-radius: 5px;
+  font-size: 10px;
+  line-height: 1.3;
+  white-space: nowrap;
+}
+
+/* Week 2 headers get a subtle tint to distinguish */
+.sg-header:nth-child(n+8):nth-child(-n+13) {
+  border-top: 2px solid var(--accent2);
 }
 
 .sg-grade {
   background: var(--surface2);
-  padding: 10px 12px;
+  padding: 8px 8px;
   font-weight: 500;
-  border-radius: 6px;
+  border-radius: 5px;
   display: flex;
   align-items: center;
+  font-size: 11px;
 }
 
 .sg-cell {
   background: var(--surface2);
-  border-radius: 6px;
-  padding: 6px;
+  border-radius: 5px;
+  padding: 4px;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 3px;
 }
 
 .sg-cell input[type="number"] {
@@ -343,8 +352,8 @@ tbody td {
   border: 1px solid var(--border);
   border-radius: 4px;
   color: var(--text);
-  font-size: 12px;
-  padding: 4px 6px;
+  font-size: 11px;
+  padding: 3px 4px;
   text-align: center;
   font-family: var(--sans);
 }
@@ -355,8 +364,8 @@ tbody td {
   border: 1px solid var(--border);
   border-radius: 4px;
   color: var(--text);
-  font-size: 11px;
-  padding: 4px 6px;
+  font-size: 10px;
+  padding: 3px 4px;
   font-family: var(--sans);
 }
 
@@ -487,6 +496,6 @@ select option {
   .nav-tabs { padding: 0 16px; }
   .grid-3, .grid-4 { grid-template-columns: 1fr; }
   .grid-2 { grid-template-columns: 1fr; }
-  .schedule-grid { grid-template-columns: 120px repeat(6, minmax(80px, 1fr)); }
+  .schedule-grid { grid-template-columns: 100px repeat(12, minmax(60px, 1fr)); }
   .result-com { grid-template-columns: 50px 1fr 1fr 80px; font-size: 11px; }
 }
