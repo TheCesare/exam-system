@@ -37,7 +37,7 @@ interface DistributionResults {
 }
 
 type View = 'login' | 'user' | 'admin';
-type Page = 'teachers' | 'schedule' | 'distribute' | 'results' | 'stats';
+type Page = 'teachers' | 'schedule' | 'distribute' | 'results' | 'stats' | 'users' | 'audit';
 
 // ========== HELPERS ==========
 function parseTimeRange(tStr: string) {
@@ -87,6 +87,15 @@ export default function ExamSystem() {
   const [isConnected, setIsConnected] = useState(true);
   const [userCanEditTeachers, setUserCanEditTeachers] = useState(false);
 
+  // Multi-user state
+  const [supervisors, setSupervisors] = useState<{ id: string; name: string }[]>([]);
+  const [selectedSupervisor, setSelectedSupervisor] = useState('');
+  const [currentUser, setCurrentUser] = useState('');
+  const [auditLog, setAuditLog] = useState<{ id: string; timestamp: string; user: string; action: string; details: string }[]>([]);
+  const [supFormName, setSupFormName] = useState('');
+  const [supFormPass, setSupFormPass] = useState('');
+  const [editingSupId, setEditingSupId] = useState<string | null>(null);
+
   // Data state
   const [teachers, setTeachers] = useState<Teacher[]>([]);
   const [teacherOrder, setTeacherOrder] = useState<string[]>([]); // explicit order
@@ -107,6 +116,34 @@ export default function ExamSystem() {
 
   // Ref for Supabase realtime channels
   const channelsRef = useRef<RealtimeChannel[]>([]);
+
+  // ========== HELPER: Log audit action ==========
+  const logAudit = useCallback(async (action: string, details: string) => {
+    if (!currentUser) return;
+    try {
+      fetch('/api/audit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user: currentUser, action, details })
+      });
+    } catch { /* silent */ }
+  }, [currentUser]);
+
+  // ========== LOAD SUPERVISORS (for login dropdown) ==========
+  const loadSupervisors = useCallback(async () => {
+    try {
+      const res = await fetch('/api/supervisors');
+      if (res.ok) setSupervisors(await res.json());
+    } catch { /* silent */ }
+  }, []);
+
+  // ========== LOAD AUDIT LOG ==========
+  const loadAuditLog = useCallback(async () => {
+    try {
+      const res = await fetch('/api/audit');
+      if (res.ok) setAuditLog(await res.json());
+    } catch { /* silent */ }
+  }, []);
 
   // ========== HELPER: Save teacher order to settings ==========
   const saveTeacherOrder = async (ids: string[]) => {
@@ -264,18 +301,22 @@ export default function ExamSystem() {
 
   // ========== AUTH ==========
   const handleLogin = async (role: 'user' | 'admin') => {
+    if (role === 'user' && !selectedSupervisor) { setLoginError('Please select your name'); return; }
     if (!password.trim()) { setLoginError('Please enter the password'); return; }
     try {
       const res = await fetch('/api/auth', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ password, role })
+        body: JSON.stringify({ password, role, name: role === 'user' ? selectedSupervisor : undefined })
       });
       const data = await res.json();
       if (data.success) {
+        setCurrentUser(role === 'user' ? (data.name || selectedSupervisor) : 'Admin');
         setView(data.role);
         loadAll();
         loadSettings();
+        if (role === 'admin') { loadSupervisors(); loadAuditLog(); }
+        else { loadSupervisors(); }
       } else {
         setLoginError(data.message || 'Wrong password');
       }
@@ -287,6 +328,8 @@ export default function ExamSystem() {
     setPassword('');
     setLoginError('');
     setLoginMode(null);
+    setSelectedSupervisor('');
+    setCurrentUser('');
     setTeachers([]);
     setSchedule([]);
     setResults(null);
@@ -296,21 +339,22 @@ export default function ExamSystem() {
   // ========== TEACHER ACTIONS ==========
 
   const deleteTeacher = async (id: string) => {
-    if (!isAdmin) { showToast('الحذف للادمن فقط', 'error'); return; }
+    if (!isAdmin) { showToast('Delete is admin only', 'error'); return; }
+    const tch = teachers.find(t => t.id === id);
     if (!confirm('Delete this teacher?')) return;
     try {
       await fetch(`/api/teachers?id=${id}`, { method: 'DELETE' });
-      // Remove from order
       const newOrder = teacherOrder.filter(tid => tid !== id);
       setTeacherOrder(newOrder);
       saveTeacherOrder(newOrder);
       loadTeachers();
+      logAudit('teacher_deleted', `Deleted: ${tch?.name || id} (${tch?.subject || ''})`);
       showToast('Teacher deleted', 'success');
     } catch { showToast('Error deleting', 'error'); }
   };
 
   const startEdit = (t: Teacher) => {
-    if (!isAdmin && !userCanEditTeachers) { showToast('مفيش صلاحية تعديل - اسأل الادمن', 'error'); return; }
+    if (!isAdmin && !userCanEditTeachers) { showToast('No edit permission - ask admin', 'error'); return; }
     setEditTeacherId(t.id);
     setFormName(t.name);
     setFormSubject(t.subject);
@@ -320,8 +364,7 @@ export default function ExamSystem() {
 
   const saveTeacher = async () => {
     if (!formName.trim() || !formSubject) { showToast('Please complete all fields', 'error'); return; }
-    // User (with permission) can add and edit
-    if (!isAdmin && !userCanEditTeachers) { showToast('مفيش صلاحية - اسأل الادمن', 'error'); return; }
+    if (!isAdmin && !userCanEditTeachers) { showToast('No permission - ask admin', 'error'); return; }
     try {
       if (editTeacherId) {
         await fetch('/api/teachers', {
@@ -329,8 +372,8 @@ export default function ExamSystem() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ id: editTeacherId, name: formName.trim(), subject: formSubject, notes: formNotes.trim() })
         });
+        logAudit('teacher_edited', `Edited: ${formName.trim()} (${formSubject})`);
         showToast('Teacher updated', 'success');
-        // Order stays the same - no change to teacherOrder
       } else {
         const res = await fetch('/api/teachers', {
           method: 'POST',
@@ -343,6 +386,7 @@ export default function ExamSystem() {
           setTeacherOrder(newOrder);
           saveTeacherOrder(newOrder);
         }
+        logAudit('teacher_added', `Added: ${formName.trim()} (${formSubject})`);
         showToast('Teacher added successfully', 'success');
       }
       cancelEdit();
@@ -421,6 +465,7 @@ export default function ExamSystem() {
     try {
       await fetch('/api/schedule', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(cells) });
       showToast('Schedule saved!', 'success');
+      logAudit('schedule_saved', 'Updated exam schedule blueprint');
       loadSchedule();
     } catch { showToast('Error saving schedule', 'error'); }
   };
@@ -432,6 +477,7 @@ export default function ExamSystem() {
       await fetch('/api/schedule', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify([]) });
       loadSchedule();
       showToast('Schedule reset', 'info');
+      logAudit('schedule_reset', 'Cleared all schedule data');
     } catch { /* silent */ }
   };
 
@@ -1223,19 +1269,29 @@ export default function ExamSystem() {
               </button>
             </div>
           ) : (
-            /* Step 2: Enter password for chosen role */
+            /* Step 2: Enter credentials for chosen role */
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, marginBottom: 4, color: 'var(--text2)', fontSize: 13 }}>
-                <button onClick={() => { setLoginMode(null); setLoginError(''); setPassword(''); }} style={{ background: 'none', border: 'none', color: 'var(--text2)', cursor: 'pointer', fontSize: 16, padding: '0 4px', lineHeight: 1 }}>←</button>
+                <button onClick={() => { setLoginMode(null); setLoginError(''); setPassword(''); setSelectedSupervisor(''); }} style={{ background: 'none', border: 'none', color: 'var(--text2)', cursor: 'pointer', fontSize: 16, padding: '0 4px', lineHeight: 1 }}>←</button>
                 <span>{loginMode === 'user' ? '👤 User Login' : '🔐 Admin Login'}</span>
               </div>
+              {loginMode === 'user' && (
+                <select
+                  value={selectedSupervisor}
+                  onChange={e => { setSelectedSupervisor(e.target.value); setLoginError(''); }}
+                  style={{ padding: '14px 16px', borderRadius: 10, background: 'var(--bg)', border: '1px solid var(--border)', color: selectedSupervisor ? 'var(--text)' : 'var(--text2)', fontSize: 15, fontFamily: 'var(--sans)', outline: 'none', width: '100%', cursor: 'pointer', appearance: 'auto' }}
+                >
+                  <option value="">-- Select your name --</option>
+                  {supervisors.map(s => <option key={s.id} value={s.name}>{s.name}</option>)}
+                </select>
+              )}
               <input
                 type="password"
-                placeholder={loginMode === 'user' ? 'Enter User Password' : 'Enter Admin Password'}
+                placeholder={loginMode === 'user' ? 'Enter Password' : 'Enter Admin Password'}
                 value={password}
                 onChange={e => { setPassword(e.target.value); setLoginError(''); }}
                 onKeyDown={e => e.key === 'Enter' && handleLogin(loginMode)}
-                autoFocus
+                autoFocus={loginMode === 'admin'}
                 style={{ padding: '14px 16px', borderRadius: 10, background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text)', fontSize: 15, fontFamily: 'var(--sans)', outline: 'none', textAlign: 'center', width: '100%' }}
               />
               <button
@@ -1257,7 +1313,7 @@ export default function ExamSystem() {
                   else (e.target as HTMLElement).style.opacity = '1';
                 }}
               >
-                {loginMode === 'user' ? 'Login' : 'Login'}
+                Login
               </button>
               {loginError && <p style={{ color: 'var(--danger)', fontSize: 12, margin: '-4px 0 0' }}>{loginError}</p>}
             </div>
@@ -1273,7 +1329,7 @@ export default function ExamSystem() {
   }
 
   const isAdmin = view === 'admin';
-  const roleLabel = isAdmin ? 'ADMIN' : 'USER';
+  const roleLabel = isAdmin ? 'ADMIN' : currentUser || 'USER';
   const roleColor = isAdmin ? 'var(--accent2)' : 'var(--accent3)';
 
   // ========== TEACHERS PAGE ==========
@@ -1653,6 +1709,130 @@ export default function ExamSystem() {
     );
   };
 
+  // ========== USERS PAGE (Admin Only) ==========
+  const renderUsersPage = () => {
+    const saveSupervisor = async () => {
+      if (!supFormName.trim() || !supFormPass.trim()) { showToast('Name and password required', 'error'); return; }
+      try {
+        const res = await fetch('/api/supervisors', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: editingSupId, name: supFormName.trim(), password: supFormPass })
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setSupervisors(data.supervisors);
+          logAudit(editingSupId ? 'user_edited' : 'user_added', `${editingSupId ? 'Edited' : 'Added'} supervisor: ${supFormName.trim()}`);
+          showToast(editingSupId ? 'User updated' : 'User added', 'success');
+          setSupFormName(''); setSupFormPass(''); setEditingSupId(null);
+        }
+      } catch { showToast('Error saving user', 'error'); }
+    };
+
+    const deleteSupervisor = async (id: string, name: string) => {
+      if (!confirm(`Delete user "${name}"?`)) return;
+      try {
+        await fetch(`/api/supervisors?id=${id}`, { method: 'DELETE' });
+        setSupervisors(prev => prev.filter(s => s.id !== id));
+        logAudit('user_deleted', `Deleted supervisor: ${name}`);
+        showToast('User deleted', 'success');
+      } catch { showToast('Error deleting', 'error'); }
+    };
+
+    return (
+      <div className="card">
+        <div className="card-header">
+          <div className="card-title">Manage Supervisors</div>
+        </div>
+        <div style={{ background: 'var(--surface2)', borderRadius: 10, padding: 20, marginBottom: 20 }}>
+          <div style={{ fontSize: 12, color: 'var(--text2)', marginBottom: 10, fontWeight: 600 }}>
+            {editingSupId ? 'EDIT SUPERVISOR' : 'ADD NEW SUPERVISOR'}
+          </div>
+          <div className="grid-3">
+            <div className="form-group">
+              <label className="form-label">Full Name</label>
+              <input className="form-input" value={supFormName} onChange={e => setSupFormName(e.target.value)} placeholder="e.g. Ahmed Mohamed" />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Password</label>
+              <input className="form-input" type="text" value={supFormPass} onChange={e => setSupFormPass(e.target.value)} placeholder={editingSupId ? 'Leave blank to keep current' : 'Set password'} />
+            </div>
+            <div className="form-group" style={{ display: 'flex', alignItems: 'flex-end', gap: 8 }}>
+              <button className="btn btn-primary" onClick={saveSupervisor} style={{ flex: 1 }}>
+                {editingSupId ? '✓ Update' : '+ Add User'}
+              </button>
+              {editingSupId && (
+                <button className="btn btn-ghost" onClick={() => { setEditingSupId(null); setSupFormName(''); setSupFormPass(''); }}>Cancel</button>
+              )}
+            </div>
+          </div>
+        </div>
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>#</th><th>Name</th><th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {supervisors.length === 0 ? (
+                <tr><td colSpan={3} style={{ textAlign: 'center', padding: 32, color: 'var(--text2)' }}>No supervisors added yet. Add users above.</td></tr>
+              ) : supervisors.map((s, i) => (
+                <tr key={s.id}>
+                  <td style={{ color: 'var(--text2)' }}>{i + 1}</td>
+                  <td style={{ fontWeight: 600, color: 'var(--text)' }}>{s.name}</td>
+                  <td>
+                    <button className="action-btn edit-btn" onClick={() => { setEditingSupId(s.id); setSupFormName(s.name); setSupFormPass(''); }}>✏️ Edit</button>
+                    <button className="action-btn del-btn" onClick={() => deleteSupervisor(s.id, s.name)}>✕ Remove</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    );
+  };
+
+  // ========== AUDIT LOG PAGE (Admin Only) ==========
+  const renderAuditPage = () => (
+    <div className="card">
+      <div className="card-header">
+        <div className="card-title">Activity Log</div>
+        <button className="btn btn-ghost" onClick={loadAuditLog}>↻ Refresh</button>
+      </div>
+      {auditLog.length === 0 ? (
+        <div className="empty-state"><p>No activity recorded yet.</p></div>
+      ) : (
+        <div className="table-wrap" style={{ maxHeight: '70vh', overflow: 'auto' }}>
+          <table>
+            <thead>
+              <tr>
+                <th>#</th><th>Time</th><th>User</th><th>Action</th><th>Details</th>
+              </tr>
+            </thead>
+            <tbody>
+              {auditLog.map((entry, i) => {
+                const time = new Date(entry.timestamp);
+                const timeStr = time.toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+                const actionColor = entry.action.includes('delete') ? 'var(--danger)' : entry.action.includes('add') ? 'var(--accent3)' : 'var(--accent)';
+                return (
+                  <tr key={entry.id || i}>
+                    <td style={{ color: 'var(--text2)' }}>{i + 1}</td>
+                    <td style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text2)', whiteSpace: 'nowrap' }}>{timeStr}</td>
+                    <td style={{ fontWeight: 600, color: 'var(--text)' }}>{entry.user}</td>
+                    <td><span className="badge" style={{ background: `${actionColor}15`, color: actionColor, textTransform: 'capitalize' }}>{entry.action.replace(/_/g, ' ')}</span></td>
+                    <td style={{ color: 'var(--text2)', fontSize: 12 }}>{entry.details}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+
   // ========== MAIN APP RENDER ==========
   const hasResults = !!(results?.assignments && results?.standbys && results?.tracking);
   const pages: { key: Page; label: string; adminOnly: boolean; requiresResults?: boolean }[] = [
@@ -1660,7 +1840,9 @@ export default function ExamSystem() {
     { key: 'schedule', label: '📅 Schedule', adminOnly: false },
     { key: 'distribute', label: '⚡ Distribute', adminOnly: true },
     { key: 'results', label: '📋 Results', adminOnly: false },
-    { key: 'stats', label: '📊 Statistics Load Ledger', adminOnly: false, requiresResults: true },
+    { key: 'stats', label: '📊 Statistics', adminOnly: false, requiresResults: true },
+    { key: 'users', label: '👥 Users', adminOnly: true },
+    { key: 'audit', label: '📝 Log', adminOnly: true },
   ];
 
   const visiblePages = pages.filter(p => {
@@ -1727,6 +1909,8 @@ export default function ExamSystem() {
             {activePage === 'distribute' && renderDistributePage()}
             {activePage === 'results' && renderResultsPage()}
             {activePage === 'stats' && renderStatsPage()}
+            {activePage === 'users' && renderUsersPage()}
+            {activePage === 'audit' && renderAuditPage()}
           </>
         )}
       </main>
