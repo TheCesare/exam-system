@@ -8,7 +8,9 @@ import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 
 // ========== CONSTANTS ==========
-const DAYS = ['Saturday','Sunday','Monday','Tuesday','Wednesday','Thursday'];
+const WEEK1_DAYS = ['W1-Saturday','W1-Sunday','W1-Monday','W1-Tuesday','W1-Wednesday','W1-Thursday'];
+const WEEK2_DAYS = ['W2-Saturday','W2-Sunday','W2-Monday','W2-Tuesday','W2-Wednesday','W2-Thursday'];
+const DAYS = [...WEEK1_DAYS, ...WEEK2_DAYS];
 const GRADES = [
   'Grade 3 Primary','Grade 4 Primary','Grade 5 Primary','Grade 6 Primary',
   'Grade 1 Prep','Grade 2 Prep','Grade 1 Secondary','Grade 2 Secondary'
@@ -230,7 +232,7 @@ export default function ExamSystem() {
         if (data && data.data) {
           const d = data.data;
           // v6+ results must have _version >= 6. Old results → discard.
-          if (!d._version || d._version < 8) {
+          if (!d._version || d._version < 12) {
             await fetch('/api/results', { method: 'DELETE' });
             setResults(null);
           } else {
@@ -587,10 +589,10 @@ export default function ExamSystem() {
         if (ruleDayLimit && tr.dayComm[slot.day] >= 1) continue;
         // SOFT: No same grade on consecutive days (can be relaxed)
         if (!relaxAdj && wasSameGradeAdjacent(tr, slot)) continue;
-        // Scoring: hours are king, tiny random for variety between equal candidates
+        // Scoring: HOURS dominate (500x), then committees (10x), tiny noise for variety
         const isAdmin = t.subject === 'Admin';
-        const adminBonus = (adminAssignmentCount[t.id] || 0) < adminMinTarget ? -3 : 0;
-        const score = tr.totalHours * 200 + tr.totalComm * 5 + (isAdmin ? 3 + adminBonus : 0) + Math.random() * 0.2;
+        const adminBonus = (adminAssignmentCount[t.id] || 0) < adminMinTarget ? -5 : 0;
+        const score = tr.totalHours * 500 + tr.totalComm * 10 + (isAdmin ? 3 + adminBonus : 0) + Math.random() * 0.1;
         candidates.push({ teacher: t, score });
       }
       if (candidates.length === 0) return null;
@@ -610,7 +612,7 @@ export default function ExamSystem() {
         if (ruleSubject && slot.subject && t.subject === slot.subject) continue;
         if (tr.assignedSlots.some(s => s.day === slot.day && !(slot.timeInfo.end <= s.start || slot.timeInfo.start >= s.end))) continue;
         if (ruleDayLimit && tr.dayComm[slot.day] >= 1) continue;
-        const score = tr.totalHours * 200 + tr.totalComm * 5 + Math.random() * 0.2;
+        const score = tr.totalHours * 500 + tr.totalComm * 10 + Math.random() * 0.1;
         candidates.push({ teacher: t, score });
       }
       if (candidates.length === 0) return null;
@@ -627,7 +629,7 @@ export default function ExamSystem() {
         // HARD: Still no own-subject supervision even in force-day mode
         if (ruleSubject && slot.subject && t.subject === slot.subject) continue;
         if (tr.assignedSlots.some(s => s.day === slot.day && !(slot.timeInfo.end <= s.start || slot.timeInfo.start >= s.end))) continue;
-        const score = tr.totalHours * 200 + tr.totalComm * 5 + (tr.dayComm[slot.day] || 0) * 50 + Math.random() * 0.2;
+        const score = tr.totalHours * 500 + tr.totalComm * 10 + (tr.dayComm[slot.day] || 0) * 100 + Math.random() * 0.1;
         candidates.push({ teacher: t, score });
       }
       if (candidates.length === 0) return null;
@@ -793,8 +795,8 @@ export default function ExamSystem() {
 
     // ---- Post-distribution: BALANCE PASS ----
     // Iteratively swap assignments from overburdened → underburdened teachers
-    // to minimize the max-min spread in hours
-    const BALANCE_ITERATIONS = 150;
+    // to minimize the max-min spread in BOTH hours (primary) and committees (secondary)
+    const BALANCE_ITERATIONS = 500;
     const recalcHours = () => {
       teachers.forEach(t => {
         const slots = tracking[t.id].assignedSlots || [];
@@ -812,24 +814,33 @@ export default function ExamSystem() {
     for (let iter = 0; iter < BALANCE_ITERATIONS; iter++) {
       const active = teachers.filter(t => tracking[t.id].totalComm > 0);
       if (active.length < 2) break;
-      const sorted = [...active].sort((a, b) => tracking[b.id].totalHours - tracking[a.id].totalHours);
+      // Sort by HOURS first (primary), then committees (secondary)
+      const sorted = [...active].sort((a, b) => {
+        const hDiff = tracking[b.id].totalHours - tracking[a.id].totalHours;
+        if (Math.abs(hDiff) > 0.1) return hDiff;
+        return tracking[b.id].totalComm - tracking[a.id].totalComm;
+      });
       const maxH = tracking[sorted[0].id].totalHours;
       const minH = tracking[sorted[sorted.length - 1].id].totalHours;
-      if (maxH - minH <= 1.0) break; // spread ≤ 1h — good enough
+      if (maxH - minH <= 0.5) break; // spread ≤ 0.5h — tight balance
 
       let swapped = false;
-      // Try top-3 donors × bottom-3 recipients
-      for (let di = 0; di < Math.min(sorted.length, 3) && !swapped; di++) {
+      // Try top-5 donors × bottom-5 recipients for wider swap search
+      for (let di = 0; di < Math.min(sorted.length, 5) && !swapped; di++) {
         const donor = sorted[di];
         // Don't strip admins below their minimum
         const isDonorAdmin = donor.subject === 'Admin';
         if (tracking[donor.id].totalComm <= 1) continue;
         if (isDonorAdmin && tracking[donor.id].totalComm <= adminMinTarget) continue;
 
-        for (let ri = sorted.length - 1; ri >= Math.max(0, sorted.length - 3) && !swapped; ri--) {
+        for (let ri = sorted.length - 1; ri >= Math.max(0, sorted.length - 5) && !swapped; ri--) {
           const recip = sorted[ri];
           if (donor.id === recip.id) continue;
           if (tracking[donor.id].totalHours <= tracking[recip.id].totalHours + 0.3) continue;
+            // Also check if committees would be more balanced after swap
+            const donorCommAfter = tracking[donor.id].totalComm - 1;
+            const recipCommAfter = tracking[recip.id].totalComm + 1;
+            // Skip if swap would make committee imbalance worse (donor already has fewer comms)
 
           // Try each day where donor has an assignment and recipient doesn't
           for (const day of DAYS) {
@@ -1018,19 +1029,19 @@ export default function ExamSystem() {
     const allH = teachers.map(t => tracking[t.id]?.totalHours || 0);
     const avgAll = allH.length ? allH.reduce((a, b) => a + b, 0) / allH.length : 0;
     const spread = allH.length ? Math.sqrt(allH.reduce((s, h) => s + (h - avgAll) ** 2, 0) / allH.length) : 0;
-    let msg = `v8 | Avg: ${avgAll.toFixed(1)}h | Spread: ${spread.toFixed(1)} | Min: ${allH.length ? Math.min(...allH).toFixed(1) : 0}h | Max: ${allH.length ? Math.max(...allH).toFixed(1) : 0}h`;
+    let msg = `v12 | Avg: ${avgAll.toFixed(1)}h | Spread: ${spread.toFixed(1)} | Min: ${allH.length ? Math.min(...allH).toFixed(1) : 0}h | Max: ${allH.length ? Math.max(...allH).toFixed(1) : 0}h`;
     // Count total standby assigned
     const totalStandby = Object.values(standbys).reduce((a, daySt) => a + Object.values(daySt).reduce((b, stList) => b + stList.length, 0), 0);
     if (totalStandby > 0) msg += ` | ${totalStandby} standby (${STANDBY_PER_STAGE}/stage/day)`;
     if (standbyCount > 0) msg += ` | ${standbyCount} unfilled`;
     if (violations.length > 0) {
       msg += ` | ${violations.length} violations (check console)`;
-      console.warn('[Distribution v8] Violations:', violations);
+      console.warn('[Distribution v12] Violations:', violations);
     } else {
-      console.log('[Distribution v8] All constraints passed!');
+      console.log('[Distribution v12] All constraints passed!');
     }
 
-    const newResults: DistributionResults = { _version: 8, assignments: finalAssignments, standbys, tracking };
+    const newResults: DistributionResults = { _version: 12, assignments: finalAssignments, standbys, tracking };
     setResults(newResults);
     fetch('/api/results', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: newResults }) });
     showToast(msg, standbyCount > 0 || violations.length > 0 ? 'error' : 'success');
@@ -1042,17 +1053,18 @@ export default function ExamSystem() {
     if (!results?.assignments) return;
     let csv = 'Day,Grade,Time,Subject,Committee,Supervisor1,Supervisor2,Role\n';
     DAYS.forEach(day => {
+      const displayDay = day.replace('W1-','Week 1 - ').replace('W2-','Week 2 - ');
       const sessions = results.assignments[day] || [];
       sessions.forEach(s => {
         s.committees.forEach(c => {
-          csv += `"${day}","${s.grade}","${s.time}","${s.subject || ''}","Room ${c.serial}","${c.t1.name}","${c.t2.name}","Primary"\n`;
+          csv += `"${displayDay}","${s.grade}","${s.time}","${s.subject || ''}","Room ${c.serial}","${c.t1.name}","${c.t2.name}","Primary"\n`;
         });
       });
       if (results.standbys?.[day]) {
         const STAGE_CSV: Record<string, string> = { primary: 'Primary', prep: 'Prep', sec: 'Secondary' };
         for (const stage of ['primary', 'prep', 'sec']) {
           for (const s of (results.standbys[day][stage] || [])) {
-            csv += `"${day}","${STAGE_CSV[stage]}","","","Standby","${s.name}","","Standby"\n`;
+            csv += `"${displayDay}","${STAGE_CSV[stage]}","","","Standby","${s.name}","","Standby"\n`;
           }
         }
       }
@@ -1424,13 +1436,19 @@ export default function ExamSystem() {
       </div>
       <div className="table-wrap" style={{ maxHeight: '70vh', overflow: 'auto' }}>
         <div className="schedule-grid">
-          <div className="sg-header">Grade Blueprint</div>
-          {DAYS.map(d => <div key={d} className="sg-header">{d}</div>)}
-
+          {/* Row 1: Corner + Week Labels */}
+          <div className="sg-corner">Grade</div>
+          <div className="sg-week-label" style={{ gridColumn: 'span 6', color: 'var(--accent)', background: 'rgba(0,212,255,0.08)' }}>── Week 1 ──</div>
+          <div className="sg-week-label sg-w2-sep" style={{ gridColumn: 'span 6', color: 'var(--accent2)', background: 'rgba(255,107,53,0.08)' }}>── Week 2 ──</div>
+          {/* Row 2: Corner + Day Names */}
+          <div className="sg-header">Grade</div>
+          {WEEK1_DAYS.map(d => <div key={d} className="sg-header">{d.replace('W1-','').slice(0,3)}</div>)}
+          {WEEK2_DAYS.map(d => <div key={d} className="sg-header sg-w2-sep">{d.replace('W2-','').slice(0,3)}</div>)}
+          {/* Data Rows */}
           {GRADES.map(grade => (
             <React.Fragment key={grade}>
               <div className="sg-grade">{grade}</div>
-              {DAYS.map(day => {
+              {WEEK1_DAYS.map(day => {
                 const cell = getCell(grade, day);
                 return (
                   <div key={day} className="sg-cell">
@@ -1439,7 +1457,20 @@ export default function ExamSystem() {
                       <option value="">Subject</option>
                       {SUBJECTS.map(s => <option key={s} value={s}>{s}</option>)}
                     </select>
-                    <input type="text" placeholder="Time Window" value={cell.time || ''} onChange={e => updateCell(grade, day, 'time', e.target.value)} readOnly={!isAdmin} style={!isAdmin ? { opacity: 0.7, cursor: 'not-allowed' } : {}} />
+                    <input type="text" placeholder="Time" value={cell.time || ''} onChange={e => updateCell(grade, day, 'time', e.target.value)} readOnly={!isAdmin} style={!isAdmin ? { opacity: 0.7, cursor: 'not-allowed' } : {}} />
+                  </div>
+                );
+              })}
+              {WEEK2_DAYS.map(day => {
+                const cell = getCell(grade, day);
+                return (
+                  <div key={day} className="sg-cell sg-w2-cell">
+                    <input type="number" min="0" placeholder="Comms" value={cell.committees || ''} onChange={e => updateCell(grade, day, 'committees', parseInt(e.target.value) || 0)} readOnly={!isAdmin} style={!isAdmin ? { opacity: 0.7, cursor: 'not-allowed' } : {}} />
+                    <select value={cell.subject || ''} onChange={e => updateCell(grade, day, 'subject', e.target.value)} disabled={!isAdmin} style={!isAdmin ? { opacity: 0.7, cursor: 'not-allowed' } : {}}>
+                      <option value="">Subject</option>
+                      {SUBJECTS.map(s => <option key={s} value={s}>{s}</option>)}
+                    </select>
+                    <input type="text" placeholder="Time" value={cell.time || ''} onChange={e => updateCell(grade, day, 'time', e.target.value)} readOnly={!isAdmin} style={!isAdmin ? { opacity: 0.7, cursor: 'not-allowed' } : {}} />
                   </div>
                 );
               })}
@@ -1507,18 +1538,29 @@ export default function ExamSystem() {
         <div style={{ marginBottom: 16, display: 'flex', gap: 10 }}>
           <button className="btn btn-primary" onClick={exportPDF}>📄 Download PDF (A4 Printable)</button>
         </div>
-        {DAYS.map(day => {
+        {DAYS.map((day, idx) => {
           const sessions = results.assignments[day] || [];
           const dayStandbys = results.standbys?.[day];
           const hasStandby = dayStandbys && Object.values(dayStandbys).some(s => s.length > 0);
           if (sessions.length === 0 && !hasStandby) return null;
+          const displayDay = day.replace('W1-','Week 1 - ').replace('W2-','Week 2 - ');
+          // Week separator before first W2 day
+          const weekSep = idx === WEEK1_DAYS.length ? (
+            <div key="w2-sep" style={{ display: 'flex', alignItems: 'center', gap: 12, margin: '20px 0 8px', color: 'var(--accent2)', fontWeight: 700, fontSize: 14 }}>
+              <span style={{ flex: 1, height: 1, background: 'linear-gradient(90deg, var(--accent2), transparent)' }} />
+              ── Week 2 ──
+              <span style={{ flex: 1, height: 1, background: 'linear-gradient(270deg, var(--accent2), transparent)' }} />
+            </div>
+          ) : null;
           return (
-            <div key={day} className="result-day">
+            <React.Fragment key={day}>
+              {weekSep}
+            <div className="result-day">
               <div className="result-day-header" onClick={() => {
                 const body = document.getElementById('day-body-' + day);
                 if (body) body.style.display = body.style.display === 'none' ? 'block' : 'none';
               }}>
-                <div className="result-day-title">📅 Day: {day} </div>
+                <div className="result-day-title">📅 {displayDay} </div>
                 <span>View Options ▼</span>
               </div>
               <div className="result-day-body" id={'day-body-' + day} style={{ display: 'block' }}>
@@ -1571,6 +1613,7 @@ export default function ExamSystem() {
                 )}
               </div>
             </div>
+            </React.Fragment>
           );
         })}
       </div>
@@ -1650,7 +1693,8 @@ export default function ExamSystem() {
               <thead>
                 <tr>
                   <th>#</th><th>Teacher Name</th><th>Subject</th>
-                  {DAYS.map(d => <th key={d}>{d.slice(0, 3)}</th>)}
+                  {WEEK1_DAYS.map(d => <th key={d}>{d.replace('W1-','').slice(0,3)}</th>)}
+                  {WEEK2_DAYS.map(d => <th key={d} style={{ borderLeft: '2px solid var(--accent2)' }}>{d.replace('W2-','').slice(0,3)}</th>)}
                   <th style={{ background: 'rgba(0,212,255,0.1)' }}>Total<br/>Committees</th>
                   <th style={{ background: 'rgba(0,255,157,0.1)', minWidth: 100 }}>Total<br/>Hours</th>
                   <th>Status</th>
@@ -1673,10 +1717,10 @@ export default function ExamSystem() {
                       <td style={{ color: 'var(--text2)' }}>{i + 1}</td>
                       <td style={{ fontWeight: 600, color: 'var(--text)' }}>{t.name}</td>
                       <td><span className="badge badge-blue">{t.subject}</span></td>
-                      {DAYS.map(d => {
+                      {DAYS.map((d, di) => {
                         const val = ts.dayComm[d] || 0;
                         const cellColor = val >= 2 ? 'var(--danger)' : val === 1 ? 'var(--accent3)' : 'var(--text2)';
-                        return <td key={d} style={{ textAlign: 'center', fontWeight: 600, color: cellColor }}>{val || '-'}</td>;
+                        return <td key={d} style={{ textAlign: 'center', fontWeight: 600, color: cellColor, ...(di === WEEK1_DAYS.length ? { borderLeft: '2px solid var(--accent2)' } : {}) }}>{val || '-'}</td>;
                       })}
                       <td style={{ textAlign: 'center', fontWeight: 700, color: 'var(--accent)', fontFamily: 'var(--mono)' }}>{ts.totalComm}</td>
                       <td style={{ background: 'rgba(0,255,157,0.03)', padding: '8px 14px' }}>
@@ -1693,9 +1737,9 @@ export default function ExamSystem() {
                 })}
                 <tr style={{ background: 'rgba(0,212,255,0.05)', fontWeight: 700 }}>
                   <td colSpan={3} style={{ color: 'var(--accent)', fontWeight: 700 }}>TOTAL</td>
-                  {DAYS.map(d => {
+                  {DAYS.map((d, di) => {
                     const dayTotal = teachers.reduce((a, t) => a + teacherStats[t.id].dayComm[d], 0);
-                    return <td key={d} style={{ textAlign: 'center', color: 'var(--accent)' }}>{dayTotal}</td>;
+                    return <td key={d} style={{ textAlign: 'center', color: 'var(--accent)', ...(di === WEEK1_DAYS.length ? { borderLeft: '2px solid var(--accent2)' } : {}) }}>{dayTotal}</td>;
                   })}
                   <td style={{ textAlign: 'center', color: 'var(--accent)', fontFamily: 'var(--mono)' }}>{totalComAll}</td>
                   <td style={{ fontFamily: 'var(--mono)', fontWeight: 700, color: 'var(--accent3)', padding: '8px 14px' }}>{totalHrsAll.toFixed(1)}h</td>
@@ -1857,7 +1901,7 @@ export default function ExamSystem() {
       <header>
         <div className="logo">
           <div className="logo-dot" />
-          EXAM · SUPERVISOR · EQUALIZER · v10
+          EXAM · SUPERVISOR · EQUALIZER · v12
         </div>
         <div className="header-actions">
           <span className="badge" style={{ background: `${roleColor}22`, color: roleColor }}>{roleLabel}</span>

@@ -305,9 +305,41 @@ tbody td {
 /* ========== SCHEDULE GRID ========== */
 .schedule-grid {
   display: grid;
-  grid-template-columns: 160px repeat(6, 1fr);
-  gap: 4px;
+  grid-template-columns: 130px repeat(12, minmax(60px, 1fr));
+  gap: 3px;
+  font-size: 11px;
+}
+
+.sg-corner {
+  background: var(--surface2);
+  padding: 8px 10px;
+  font-weight: 700;
+  color: var(--text2);
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+}
+
+.sg-week-label {
+  text-align: center;
+  font-weight: 700;
   font-size: 12px;
+  padding: 8px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  letter-spacing: 1px;
+}
+
+.sg-w2-sep {
+  border-left: 2px solid var(--accent2);
+}
+
+.sg-w2-cell {
+  border-left: 2px solid var(--accent2);
 }
 
 .sg-header {
@@ -487,6 +519,6 @@ select option {
   .nav-tabs { padding: 0 16px; }
   .grid-3, .grid-4 { grid-template-columns: 1fr; }
   .grid-2 { grid-template-columns: 1fr; }
-  .schedule-grid { grid-template-columns: 120px repeat(6, minmax(80px, 1fr)); }
+  .schedule-grid { grid-template-columns: 100px repeat(12, minmax(52px, 1fr)); font-size: 10px; }
   .result-com { grid-template-columns: 50px 1fr 1fr 80px; font-size: 11px; }
 }
