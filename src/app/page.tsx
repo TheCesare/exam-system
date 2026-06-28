@@ -39,7 +39,7 @@ interface DistributionResults {
 }
 
 type View = 'login' | 'user' | 'admin';
-type Page = 'teachers' | 'schedule' | 'distribute' | 'results' | 'stats' | 'users' | 'audit';
+type Page = 'teachers' | 'schedule' | 'distribute' | 'results' | 'stats' | 'users' | 'admin-log' | 'user-log';
 
 // ========== HELPERS ==========
 function parseTimeRange(tStr: string) {
@@ -232,7 +232,7 @@ export default function ExamSystem() {
         if (data && data.data) {
           const d = data.data;
           // v6+ results must have _version >= 6. Old results → discard.
-          if (!d._version || d._version < 10) {
+          if (!d._version || d._version < 11) {
             await fetch('/api/results', { method: 'DELETE' });
             setResults(null);
           } else {
@@ -534,10 +534,9 @@ export default function ExamSystem() {
     const ruleSubject = (document.getElementById('rule-subject') as HTMLInputElement)?.checked ?? true;
     const ruleDayLimit = (document.getElementById('rule-daylimit') as HTMLInputElement)?.checked ?? true;
     const ruleNotes = (document.getElementById('rule-notes') as HTMLInputElement)?.checked ?? true;
+    const includeAdminW2 = (document.getElementById('rule-admin-w2') as HTMLInputElement)?.checked ?? false;
 
-    // ---- Admin handling: Admin subject = LAST resort, fewer assignments ----
-    const adminTeachers = teachers.filter(t => t.subject === 'Admin');
-    const nonAdminTeachers = teachers.filter(t => t.subject !== 'Admin');
+    // ---- Admin handling: Admin subject excluded by default, included only for W2 peak days ----
 
     // ---- Initialize tracking ----
     const tracking: Record<string, TrackingEntry> = {};
@@ -605,15 +604,9 @@ export default function ExamSystem() {
       return a;
     };
 
-    // ---- Admin minimum assignment tracking ----
-    const adminAssignmentCount: Record<string, number> = {};
-    adminTeachers.forEach(t => { adminAssignmentCount[t.id] = 0; });
-    const adminMinTarget = 0; // admin = last resort, no minimum
-    let totalAdminAssigned = 0;
-
     // ---- Core: Find best teacher for a slot ----
     // HARD RULES: own-subject, stage notes, NO same-day double, time overlap
-    // Scoring: hours dominate (200x), tiny noise (0.2) for variety
+    // Scoring: hours dominate (500x), tiny noise (0.1) for variety
     const findBest = (
       blockedId: string | null,
       slot: Slot,
@@ -668,7 +661,7 @@ export default function ExamSystem() {
       return candidates[0].teacher;
     };
 
-    // ---- Fallback 3: Allow 3rd assignment same day (only time overlap + own-subject blocked) ----
+    // ---- Fallback 3: Allow 2nd assignment same day (time overlap + own-subject + max 2/day blocked) ----
     const findBestForceDay = (blockedId: string | null, slot: Slot, pool: Teacher[]): Teacher | null => {
       const candidates: { teacher: Teacher; score: number }[] = [];
       for (const t of pool) {
@@ -677,6 +670,8 @@ export default function ExamSystem() {
         // HARD: Still no own-subject supervision even in force-day mode
         if (ruleSubject && slot.subject && t.subject === slot.subject) continue;
         if (tr.assignedSlots.some(s => s.day === slot.day && !(slot.timeInfo.end <= s.start || slot.timeInfo.start >= s.end))) continue;
+        // HARD: ABSOLUTE MAX 2 committees per teacher per day (never exceeded)
+        if (ruleDayLimit && tr.dayComm[slot.day] >= 2) continue;
         const isAdmin = t.subject === 'Admin';
         const adminPenalty = isAdmin ? 50000 : 0;
         const score = tr.totalHours * 500 + tr.totalComm * 10 + (tr.dayComm[slot.day] || 0) * 100 + adminPenalty + Math.random() * 0.1;
@@ -689,9 +684,17 @@ export default function ExamSystem() {
 
     // ---- Process each day chronologically, shuffle slots within day for variety ----
     let standbyCount = 0;
-    const allPool = [...teachers]; // ALL teachers including admin
+    const nonAdminTeachers = teachers.filter(t => t.subject !== 'Admin');
+
+    // Calculate Week 2 peak days (days with above-average committee count)
+    const w2SlotCounts = WEEK2_DAYS.map(d => slotsByDay[d].length).filter(c => c > 0);
+    const w2Avg = w2SlotCounts.length > 0 ? w2SlotCounts.reduce((a, b) => a + b, 0) / w2SlotCounts.length : 0;
+    const peakW2Days = new Set(WEEK2_DAYS.filter(d => slotsByDay[d].length >= w2Avg && slotsByDay[d].length > 0));
 
     for (const day of DAYS) {
+      // Determine pool: Admin only included on W2 peak days when toggle is ON
+      const isW2Peak = WEEK2_DAYS.includes(day) && peakW2Days.has(day);
+      const dayPool = (includeAdminW2 && isW2Peak) ? [...teachers] : nonAdminTeachers;
       const daySlots = shuffle(slotsByDay[day]);
       if (daySlots.length === 0) continue;
 
@@ -700,10 +703,10 @@ export default function ExamSystem() {
         let t2: Teacher | null = null;
 
         // T1: strict → relax consecutive → relax subject+stage → allow 2nd same-day
-        t1 = findBest(null, slot, allPool, false);
-        if (!t1) t1 = findBest(null, slot, allPool, true); // relax consecutive-day
-        if (!t1) t1 = findBestRelaxed(null, slot, allPool); // relax subject + stage
-        if (!t1) t1 = findBestForceDay(null, slot, allPool); // allow 2nd assignment same day
+        t1 = findBest(null, slot, dayPool, false);
+        if (!t1) t1 = findBest(null, slot, dayPool, true); // relax consecutive-day
+        if (!t1) t1 = findBestRelaxed(null, slot, dayPool); // relax subject + stage
+        if (!t1) t1 = findBestForceDay(null, slot, dayPool); // allow 2nd assignment same day
 
         if (t1) {
           const tr = tracking[t1.id];
@@ -714,10 +717,10 @@ export default function ExamSystem() {
 
         // T2: same pool, blocked=T1, cascade fallbacks
         const blocked = t1?.id || null;
-        t2 = findBest(blocked, slot, allPool, false);
-        if (!t2) t2 = findBest(blocked, slot, allPool, true);
-        if (!t2) t2 = findBestRelaxed(blocked, slot, allPool);
-        if (!t2) t2 = findBestForceDay(blocked, slot, allPool);
+        t2 = findBest(blocked, slot, dayPool, false);
+        if (!t2) t2 = findBest(blocked, slot, dayPool, true);
+        if (!t2) t2 = findBestRelaxed(blocked, slot, dayPool);
+        if (!t2) t2 = findBestForceDay(blocked, slot, dayPool);
 
         if (t2) {
           const tr = tracking[t2.id];
@@ -783,9 +786,7 @@ export default function ExamSystem() {
       }
     });
 
-    // ---- Post-distribution: Admin is LAST resort, no minimum targets ----
-    // Admin teachers only get assignments when no other teachers are available
-    // (handled by the heavy penalty in scoring)
+    // ---- Post-distribution: Admin already handled by pool exclusion ----
 
     // ---- Post-distribution: BALANCE PASS ----
     // Iteratively swap assignments from overburdened → underburdened teachers
@@ -919,6 +920,10 @@ export default function ExamSystem() {
     for (let di = 0; di < DAYS.length; di++) {
       const day = DAYS[di];
 
+      // Determine pool for standby (same logic as distribution)
+      const isW2Peak = WEEK2_DAYS.includes(day) && peakW2Days.has(day);
+      const dayStandbyPool = (includeAdminW2 && isW2Peak) ? [...teachers] : nonAdminTeachers;
+
       for (const stage of STAGES_LIST) {
         // Only assign standby if there are exams for this stage on this day
         const stageSessions = (finalAssignments[day] || []).filter(s => getStage(s.grade) === stage);
@@ -930,7 +935,7 @@ export default function ExamSystem() {
 
         // Find teachers NOT assigned on this day who can supervise this stage
         // AND whose subject doesn't match any exam subject for this stage today
-        let candidates = teachers.filter(t => {
+        let candidates = dayStandbyPool.filter(t => {
           if ((tracking[t.id].dayComm[day] || 0) >= 2) return false;
           if (todayStandby[day].has(t.id)) return false; // already standby for another stage today
           if (!canSuperviseStage(t, stage)) return false;
@@ -994,12 +999,12 @@ export default function ExamSystem() {
         }
       }
     }
-    // V-Check 3: Same-day double assignment (should NEVER happen now)
+    // V-Check 3: More than 2 same-day assignments (HARD RULE)
     for (const t of teachers) {
       const tr = tracking[t.id];
       for (const day of DAYS) {
-        if ((tr.dayComm[day] || 0) > 1) {
-          violations.push(`${t.name} -> 2+ committees on ${day} (HARD RULE VIOLATED)`);
+        if ((tr.dayComm[day] || 0) > 2) {
+          violations.push(`${t.name} -> 3+ committees on ${day} (HARD RULE VIOLATED)`);
         }
       }
     }
@@ -1024,19 +1029,19 @@ export default function ExamSystem() {
     const allH = teachers.map(t => tracking[t.id]?.totalHours || 0);
     const avgAll = allH.length ? allH.reduce((a, b) => a + b, 0) / allH.length : 0;
     const spread = allH.length ? Math.sqrt(allH.reduce((s, h) => s + (h - avgAll) ** 2, 0) / allH.length) : 0;
-    let msg = `v10 | Avg: ${avgAll.toFixed(1)}h | Spread: ${spread.toFixed(1)} | Min: ${allH.length ? Math.min(...allH).toFixed(1) : 0}h | Max: ${allH.length ? Math.max(...allH).toFixed(1) : 0}h`;
+    let msg = `v11 | Avg: ${avgAll.toFixed(1)}h | Spread: ${spread.toFixed(1)} | Min: ${allH.length ? Math.min(...allH).toFixed(1) : 0}h | Max: ${allH.length ? Math.max(...allH).toFixed(1) : 0}h`;
     // Count total standby assigned
     const totalStandby = Object.values(standbys).reduce((a, daySt) => a + Object.values(daySt).reduce((b, stList) => b + stList.length, 0), 0);
     if (totalStandby > 0) msg += ` | ${totalStandby} standby (${STANDBY_PER_STAGE}/stage/day)`;
     if (standbyCount > 0) msg += ` | ${standbyCount} unfilled`;
     if (violations.length > 0) {
       msg += ` | ${violations.length} violations (check console)`;
-      console.warn('[Distribution v10] Violations:', violations);
+      console.warn('[Distribution v11] Violations:', violations);
     } else {
-      console.log('[Distribution v10] All constraints passed!');
+      console.log('[Distribution v11] All constraints passed!');
     }
 
-    const newResults: DistributionResults = { _version: 10, assignments: finalAssignments, standbys, tracking };
+    const newResults: DistributionResults = { _version: 11, assignments: finalAssignments, standbys, tracking };
     setResults(newResults);
     fetch('/api/results', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: newResults }) });
     showToast(msg, standbyCount > 0 || violations.length > 0 ? 'error' : 'success');
@@ -1521,10 +1526,15 @@ export default function ExamSystem() {
               <input type="checkbox" id="rule-notes" defaultChecked style={{ width: 16, height: 16, accentColor: 'var(--accent)' }} />
               Respect Stage Notes (primary/prep/sec)
             </label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, cursor: 'pointer', padding: '8px 12px', background: 'rgba(255,107,53,0.06)', borderRadius: 8, border: '1px solid rgba(255,107,53,0.15)' }}>
+              <input type="checkbox" id="rule-admin-w2" defaultChecked={false} style={{ width: 16, height: 16, accentColor: 'var(--accent2)' }} />
+              <span style={{ color: 'var(--accent2)', fontWeight: 600 }}>Admin in Week 2 only</span>
+              <span style={{ fontSize: 11, color: 'var(--text2)' }}>(peak days, last resort)</span>
+            </label>
             <div style={{ fontSize: 11, color: 'var(--text2)', lineHeight: 1.6, padding: '4px 0' }}>
               • Chronological day-by-day processing<br/>
               • MAX 2 committees per teacher per day (hard rule)<br/>
-              • Admin subject = LAST resort (fewer assignments)<br/>
+              • Admin = LAST resort, fewer hours than others<br/>
               • Hours balanced from actual assignments<br/>
               • No same grade on consecutive days<br/>
               • No time overlap for same teacher
@@ -1852,44 +1862,88 @@ export default function ExamSystem() {
     );
   };
 
-  // ========== AUDIT LOG PAGE (Admin Only) ==========
-  const renderAuditPage = () => (
-    <div className="card">
-      <div className="card-header">
-        <div className="card-title">Activity Log</div>
-        <button className="btn btn-ghost" onClick={loadAuditLog}>↻ Refresh</button>
-      </div>
-      {auditLog.length === 0 ? (
-        <div className="empty-state"><p>No activity recorded yet.</p></div>
-      ) : (
-        <div className="table-wrap" style={{ maxHeight: '70vh', overflow: 'auto' }}>
-          <table>
-            <thead>
-              <tr>
-                <th>#</th><th>Time</th><th>User</th><th>Action</th><th>Details</th>
-              </tr>
-            </thead>
-            <tbody>
-              {auditLog.map((entry, i) => {
-                const time = new Date(entry.timestamp);
-                const timeStr = time.toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
-                const actionColor = entry.action.includes('delete') ? 'var(--danger)' : entry.action.includes('add') ? 'var(--accent3)' : 'var(--accent)';
-                return (
-                  <tr key={entry.id || i}>
-                    <td style={{ color: 'var(--text2)' }}>{i + 1}</td>
-                    <td style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text2)', whiteSpace: 'nowrap' }}>{timeStr}</td>
-                    <td style={{ fontWeight: 600, color: 'var(--text)' }}>{entry.user}</td>
-                    <td><span className="badge" style={{ background: `${actionColor}15`, color: actionColor, textTransform: 'capitalize' }}>{entry.action.replace(/_/g, ' ')}</span></td>
-                    <td style={{ color: 'var(--text2)', fontSize: 12 }}>{entry.details}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+  // ========== ADMIN LOG PAGE (Admin Only) ==========
+  const renderAdminLogPage = () => {
+    const adminEntries = auditLog.filter(e => e.user === 'Admin');
+    return (
+      <div className="card">
+        <div className="card-header">
+          <div className="card-title">Admin Activity Log</div>
+          <button className="btn btn-ghost" onClick={loadAuditLog}>↻ Refresh</button>
         </div>
-      )}
-    </div>
-  );
+        {adminEntries.length === 0 ? (
+          <div className="empty-state"><p>No admin activity recorded yet.</p></div>
+        ) : (
+          <div className="table-wrap" style={{ maxHeight: '70vh', overflow: 'auto' }}>
+            <table>
+              <thead>
+                <tr>
+                  <th>#</th><th>Time</th><th>Action</th><th>Details</th>
+                </tr>
+              </thead>
+              <tbody>
+                {adminEntries.map((entry, i) => {
+                  const time = new Date(entry.timestamp);
+                  const timeStr = time.toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+                  const actionColor = entry.action.includes('delete') ? 'var(--danger)' : entry.action.includes('add') ? 'var(--accent3)' : 'var(--accent)';
+                  return (
+                    <tr key={entry.id || i}>
+                      <td style={{ color: 'var(--text2)' }}>{i + 1}</td>
+                      <td style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text2)', whiteSpace: 'nowrap' }}>{timeStr}</td>
+                      <td><span className="badge" style={{ background: `${actionColor}15`, color: actionColor, textTransform: 'capitalize' }}>{entry.action.replace(/_/g, ' ')}</span></td>
+                      <td style={{ color: 'var(--text2)', fontSize: 12 }}>{entry.details}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  // ========== USERS LOG PAGE (Admin Only) ==========
+  const renderUserLogPage = () => {
+    const userEntries = auditLog.filter(e => e.user !== 'Admin');
+    return (
+      <div className="card">
+        <div className="card-header">
+          <div className="card-title">Users Activity Log</div>
+          <button className="btn btn-ghost" onClick={loadAuditLog}>↻ Refresh</button>
+        </div>
+        {userEntries.length === 0 ? (
+          <div className="empty-state"><p>No user activity recorded yet.</p></div>
+        ) : (
+          <div className="table-wrap" style={{ maxHeight: '70vh', overflow: 'auto' }}>
+            <table>
+              <thead>
+                <tr>
+                  <th>#</th><th>Time</th><th>User</th><th>Action</th><th>Details</th>
+                </tr>
+              </thead>
+              <tbody>
+                {userEntries.map((entry, i) => {
+                  const time = new Date(entry.timestamp);
+                  const timeStr = time.toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+                  const actionColor = entry.action.includes('delete') ? 'var(--danger)' : entry.action.includes('add') ? 'var(--accent3)' : 'var(--accent)';
+                  return (
+                    <tr key={entry.id || i}>
+                      <td style={{ color: 'var(--text2)' }}>{i + 1}</td>
+                      <td style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text2)', whiteSpace: 'nowrap' }}>{timeStr}</td>
+                      <td style={{ fontWeight: 600, color: 'var(--text)' }}>{entry.user}</td>
+                      <td><span className="badge" style={{ background: `${actionColor}15`, color: actionColor, textTransform: 'capitalize' }}>{entry.action.replace(/_/g, ' ')}</span></td>
+                      <td style={{ color: 'var(--text2)', fontSize: 12 }}>{entry.details}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    );
+  };
 
   // ========== MAIN APP RENDER ==========
   const hasResults = !!(results?.assignments && results?.standbys && results?.tracking);
@@ -1900,7 +1954,8 @@ export default function ExamSystem() {
     { key: 'results', label: '📋 Results', adminOnly: false },
     { key: 'stats', label: '📊 Statistics', adminOnly: false, requiresResults: true },
     { key: 'users', label: '👥 Users', adminOnly: true },
-    { key: 'audit', label: '📝 Log', adminOnly: false },
+    { key: 'admin-log', label: '🔐 Admin Log', adminOnly: true },
+    { key: 'user-log', label: '📝 Users Log', adminOnly: true },
   ];
 
   const visiblePages = pages.filter(p => {
@@ -1915,7 +1970,7 @@ export default function ExamSystem() {
       <header>
         <div className="logo">
           <div className="logo-dot" />
-          EXAM · SUPERVISOR · EQUALIZER · v10
+          EXAM · SUPERVISOR · EQUALIZER · v11
         </div>
         <div className="header-actions">
           <span className="badge" style={{ background: `${roleColor}22`, color: roleColor }}>{roleLabel}</span>
@@ -1968,7 +2023,8 @@ export default function ExamSystem() {
             {activePage === 'results' && renderResultsPage()}
             {activePage === 'stats' && renderStatsPage()}
             {activePage === 'users' && renderUsersPage()}
-            {activePage === 'audit' && renderAuditPage()}
+            {activePage === 'admin-log' && renderAdminLogPage()}
+            {activePage === 'user-log' && renderUserLogPage()}
           </>
         )}
       </main>
