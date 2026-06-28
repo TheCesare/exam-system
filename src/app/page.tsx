@@ -232,7 +232,7 @@ export default function ExamSystem() {
         if (data && data.data) {
           const d = data.data;
           // v6+ results must have _version >= 6. Old results → discard.
-          if (!d._version || d._version < 12) {
+          if (!d._version || d._version < 10) {
             await fetch('/api/results', { method: 'DELETE' });
             setResults(null);
           } else {
@@ -245,12 +245,33 @@ export default function ExamSystem() {
 
   const loadAll = useCallback(async () => {
     setLoading(true);
-    // Load settings first to get teacher_order
-    const order = await loadSettings();
-    // Pass the fresh order directly to loadTeachers
-    Promise.all([loadTeachers(order.length > 0 ? order : undefined), loadSchedule(), loadResults()])
-      .finally(() => setLoading(false));
+    try {
+      const order = await loadSettings();
+      await Promise.all([loadTeachers(order.length > 0 ? order : undefined), loadSchedule(), loadResults()]);
+    } catch { /* silent */ }
+    finally { setLoading(false); }
   }, [loadTeachers, loadSchedule, loadResults, loadSettings]);
+
+  // ========== INIT: Load supervisors on mount (for login dropdown) ==========
+  useEffect(() => {
+    loadSupervisors();
+  }, [loadSupervisors]);
+
+  // ========== INIT: Auto-login from session ==========
+  useEffect(() => {
+    const saved = sessionStorage.getItem('exam_auth');
+    if (saved) {
+      try {
+        const { role, name } = JSON.parse(saved);
+        setView(role);
+        setCurrentUser(name || 'Admin');
+        loadAll();
+        if (role === 'admin') { loadSupervisors(); loadAuditLog(); }
+        else { loadSupervisors(); }
+      } catch { /* ignore bad session */ }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // ========== SUPABASE REALTIME ==========
   useEffect(() => {
@@ -313,8 +334,10 @@ export default function ExamSystem() {
       });
       const data = await res.json();
       if (data.success) {
-        setCurrentUser(role === 'user' ? (data.name || selectedSupervisor) : 'Admin');
+        const userName = role === 'user' ? (data.name || selectedSupervisor) : 'Admin';
+        setCurrentUser(userName);
         setView(data.role);
+        sessionStorage.setItem('exam_auth', JSON.stringify({ role: data.role, name: userName }));
         loadAll();
         loadSettings();
         if (role === 'admin') { loadSupervisors(); loadAuditLog(); }
@@ -1029,19 +1052,19 @@ export default function ExamSystem() {
     const allH = teachers.map(t => tracking[t.id]?.totalHours || 0);
     const avgAll = allH.length ? allH.reduce((a, b) => a + b, 0) / allH.length : 0;
     const spread = allH.length ? Math.sqrt(allH.reduce((s, h) => s + (h - avgAll) ** 2, 0) / allH.length) : 0;
-    let msg = `v12 | Avg: ${avgAll.toFixed(1)}h | Spread: ${spread.toFixed(1)} | Min: ${allH.length ? Math.min(...allH).toFixed(1) : 0}h | Max: ${allH.length ? Math.max(...allH).toFixed(1) : 0}h`;
+    let msg = `v10 | Avg: ${avgAll.toFixed(1)}h | Spread: ${spread.toFixed(1)} | Min: ${allH.length ? Math.min(...allH).toFixed(1) : 0}h | Max: ${allH.length ? Math.max(...allH).toFixed(1) : 0}h`;
     // Count total standby assigned
     const totalStandby = Object.values(standbys).reduce((a, daySt) => a + Object.values(daySt).reduce((b, stList) => b + stList.length, 0), 0);
     if (totalStandby > 0) msg += ` | ${totalStandby} standby (${STANDBY_PER_STAGE}/stage/day)`;
     if (standbyCount > 0) msg += ` | ${standbyCount} unfilled`;
     if (violations.length > 0) {
       msg += ` | ${violations.length} violations (check console)`;
-      console.warn('[Distribution v12] Violations:', violations);
+      console.warn('[Distribution v10] Violations:', violations);
     } else {
-      console.log('[Distribution v12] All constraints passed!');
+      console.log('[Distribution v10] All constraints passed!');
     }
 
-    const newResults: DistributionResults = { _version: 12, assignments: finalAssignments, standbys, tracking };
+    const newResults: DistributionResults = { _version: 10, assignments: finalAssignments, standbys, tracking };
     setResults(newResults);
     fetch('/api/results', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: newResults }) });
     showToast(msg, standbyCount > 0 || violations.length > 0 ? 'error' : 'success');
@@ -1901,7 +1924,7 @@ export default function ExamSystem() {
       <header>
         <div className="logo">
           <div className="logo-dot" />
-          EXAM · SUPERVISOR · EQUALIZER · v12
+          EXAM · SUPERVISOR · EQUALIZER · v10
         </div>
         <div className="header-actions">
           <span className="badge" style={{ background: `${roleColor}22`, color: roleColor }}>{roleLabel}</span>
