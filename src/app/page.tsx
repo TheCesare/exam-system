@@ -1448,34 +1448,37 @@ export default function ExamSystem() {
           <tbody>
             {teachers.length === 0 ? (
               <tr><td colSpan={5} style={{ textAlign: 'center', padding: 32 }}>No teachers loaded in registry.</td></tr>
-            ) : teachers.map((t, i) => editTeacherId === t.id ? (
-              <tr key={t.id} style={{ background: 'rgba(0,212,255,0.06)' }}>
-                <td style={{ fontWeight: 700, color: 'var(--accent)' }}>{i + 1}</td>
-                <td><input className="form-input" value={formName} onChange={e => setFormName(e.target.value)} style={{ margin: 0, padding: '6px 10px', fontSize: 13 }} autoFocus /></td>
-                <td>
-                  <select className="form-select" value={formSubject} onChange={e => setFormSubject(e.target.value)} style={{ margin: 0, padding: '6px 8px', fontSize: 13 }}>
-                    <option value="">-- Subject --</option>
-                    {SUBJECTS.map(s => <option key={s} value={s}>{s}</option>)}
-                  </select>
-                </td>
-                <td><input className="form-input" value={formNotes} onChange={e => setFormNotes(e.target.value)} placeholder="Stage notes" style={{ margin: 0, padding: '6px 10px', fontSize: 13 }} /></td>
-                <td style={{ display: 'flex', gap: 6 }}>
-                  <button className="action-btn edit-btn" onClick={() => inlineSave(t.id)} style={{ background: 'var(--success)', color: '#fff' }}>✓ Save</button>
-                  <button className="action-btn del-btn" onClick={() => setEditTeacherId(null)}>✕ Cancel</button>
-                </td>
-              </tr>
-            ) : (
-              <tr key={t.id}>
-                <td>{i + 1}</td>
-                <td style={{ fontWeight: 600, color: 'var(--text)' }}>{t.name}</td>
-                <td><span className="badge badge-blue">{t.subject}</span></td>
-                <td style={{ color: 'var(--accent3)' }}>{t.notes || 'Any Stage'}</td>
-                <td>
-                  <button className="action-btn edit-btn" onClick={() => startEdit(t)}>✏️ Edit</button>
-                  {isAdmin && <button className="action-btn del-btn" onClick={() => deleteTeacher(t.id)}>✕ Remove</button>}
-                </td>
-              </tr>
-            ))
+            ) : teachers.map((t, i) => {
+              if (editTeacherId === t.id) return (
+                <tr key={t.id} style={{ background: 'rgba(0,212,255,0.06)' }}>
+                  <td style={{ fontWeight: 700, color: 'var(--accent)' }}>{i + 1}</td>
+                  <td><input className="form-input" value={formName} onChange={e => setFormName(e.target.value)} style={{ margin: 0, padding: '6px 10px', fontSize: 13 }} autoFocus /></td>
+                  <td>
+                    <select className="form-select" value={formSubject} onChange={e => setFormSubject(e.target.value)} style={{ margin: 0, padding: '6px 8px', fontSize: 13 }}>
+                      <option value="">-- Subject --</option>
+                      {SUBJECTS.map(s => <option key={s} value={s}>{s}</option>)}
+                    </select>
+                  </td>
+                  <td><input className="form-input" value={formNotes} onChange={e => setFormNotes(e.target.value)} placeholder="Stage notes" style={{ margin: 0, padding: '6px 10px', fontSize: 13 }} /></td>
+                  <td style={{ display: 'flex', gap: 6 }}>
+                    <button className="action-btn edit-btn" onClick={() => inlineSave(t.id)} style={{ background: 'var(--success)', color: '#fff' }}>Save</button>
+                    <button className="action-btn del-btn" onClick={() => setEditTeacherId(null)}>Cancel</button>
+                  </td>
+                </tr>
+              );
+              return (
+                <tr key={t.id}>
+                  <td>{i + 1}</td>
+                  <td style={{ fontWeight: 600, color: 'var(--text)' }}>{t.name}</td>
+                  <td><span className="badge badge-blue">{t.subject}</span></td>
+                  <td style={{ color: 'var(--accent3)' }}>{t.notes || 'Any Stage'}</td>
+                  <td>
+                    <button className="action-btn edit-btn" onClick={() => startEdit(t)}>Edit</button>
+                    {isAdmin && <button className="action-btn del-btn" onClick={() => deleteTeacher(t.id)}>Remove</button>}
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
