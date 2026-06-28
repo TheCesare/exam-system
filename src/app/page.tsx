@@ -1211,7 +1211,7 @@ export default function ExamSystem() {
                 onMouseOver={e => { (e.target as HTMLElement).style.borderColor = 'var(--accent)'; (e.target as HTMLElement).style.background = 'rgba(0,212,255,0.05)'; }}
                 onMouseOut={e => { (e.target as HTMLElement).style.borderColor = 'var(--border)'; (e.target as HTMLElement).style.background = 'var(--surface2)'; }}
               >
-                <span style={{ fontSize: 22 }}>👤</span> دخول كمستخدم
+                <span style={{ fontSize: 22 }}>👤</span> Enter as User
               </button>
               <button
                 onClick={() => { setLoginMode('admin'); setLoginError(''); setPassword(''); }}
@@ -1219,7 +1219,7 @@ export default function ExamSystem() {
                 onMouseOver={e => { (e.target as HTMLElement).style.background = '#e55a2b'; }}
                 onMouseOut={e => { (e.target as HTMLElement).style.background = 'var(--accent2)'; }}
               >
-                <span style={{ fontSize: 22 }}>🔐</span> دخول كادمن
+                <span style={{ fontSize: 22 }}>🔐</span> Enter as Admin
               </button>
             </div>
           ) : (
@@ -1227,11 +1227,11 @@ export default function ExamSystem() {
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, marginBottom: 4, color: 'var(--text2)', fontSize: 13 }}>
                 <button onClick={() => { setLoginMode(null); setLoginError(''); setPassword(''); }} style={{ background: 'none', border: 'none', color: 'var(--text2)', cursor: 'pointer', fontSize: 16, padding: '0 4px', lineHeight: 1 }}>←</button>
-                <span>{loginMode === 'user' ? '👤 تسجيل دخول مستخدم' : '🔐 تسجيل دخول ادمن'}</span>
+                <span>{loginMode === 'user' ? '👤 User Login' : '🔐 Admin Login'}</span>
               </div>
               <input
                 type="password"
-                placeholder={loginMode === 'user' ? 'باسورد المستخدم' : 'باسورد الادمن'}
+                placeholder={loginMode === 'user' ? 'Enter User Password' : 'Enter Admin Password'}
                 value={password}
                 onChange={e => { setPassword(e.target.value); setLoginError(''); }}
                 onKeyDown={e => e.key === 'Enter' && handleLogin(loginMode)}
