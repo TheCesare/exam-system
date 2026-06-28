@@ -535,8 +535,9 @@ export default function ExamSystem() {
     const ruleDayLimit = (document.getElementById('rule-daylimit') as HTMLInputElement)?.checked ?? true;
     const ruleNotes = (document.getElementById('rule-notes') as HTMLInputElement)?.checked ?? true;
 
-    // ---- All teachers in ONE pool (admin participates normally) ----
+    // ---- Admin handling: Admin subject = LAST resort, fewer assignments ----
     const adminTeachers = teachers.filter(t => t.subject === 'Admin');
+    const nonAdminTeachers = teachers.filter(t => t.subject !== 'Admin');
 
     // ---- Initialize tracking ----
     const tracking: Record<string, TrackingEntry> = {};
@@ -607,7 +608,7 @@ export default function ExamSystem() {
     // ---- Admin minimum assignment tracking ----
     const adminAssignmentCount: Record<string, number> = {};
     adminTeachers.forEach(t => { adminAssignmentCount[t.id] = 0; });
-    const adminMinTarget = 2; // each admin gets at least 2 assignments
+    const adminMinTarget = 0; // admin = last resort, no minimum
     let totalAdminAssigned = 0;
 
     // ---- Core: Find best teacher for a slot ----
@@ -629,14 +630,15 @@ export default function ExamSystem() {
         if (!canSuperviseStage(t, slot.stage)) continue;
         // HARD: No time overlap on same day
         if (tr.assignedSlots.some(s => s.day === slot.day && !(slot.timeInfo.end <= s.start || slot.timeInfo.start >= s.end))) continue;
-        // HARD: MAX 1 committee per teacher per day (NEVER relaxed)
-        if (ruleDayLimit && tr.dayComm[slot.day] >= 1) continue;
+        // HARD: MAX 2 committees per teacher per day (NEVER relaxed)
+        if (ruleDayLimit && tr.dayComm[slot.day] >= 2) continue;
         // SOFT: No same grade on consecutive days (can be relaxed)
         if (!relaxAdj && wasSameGradeAdjacent(tr, slot)) continue;
         // Scoring: HOURS dominate (500x), then committees (10x), tiny noise for variety
+        // Admin subject = HEAVY penalty (always last choice)
         const isAdmin = t.subject === 'Admin';
-        const adminBonus = (adminAssignmentCount[t.id] || 0) < adminMinTarget ? -5 : 0;
-        const score = tr.totalHours * 500 + tr.totalComm * 10 + (isAdmin ? 3 + adminBonus : 0) + Math.random() * 0.1;
+        const adminPenalty = isAdmin ? 50000 : 0;
+        const score = tr.totalHours * 500 + tr.totalComm * 10 + adminPenalty + Math.random() * 0.1;
         candidates.push({ teacher: t, score });
       }
       if (candidates.length === 0) return null;
@@ -646,7 +648,7 @@ export default function ExamSystem() {
       return topGroup[Math.floor(Math.random() * topGroup.length)].teacher;
     };
 
-    // ---- Fallback 2: Relax stage constraints only (keep own-subject, 1-per-day + time) ----
+    // ---- Fallback 2: Relax stage constraints only (keep own-subject, 2-per-day + time) ----
     const findBestRelaxed = (blockedId: string | null, slot: Slot, pool: Teacher[]): Teacher | null => {
       const candidates: { teacher: Teacher; score: number }[] = [];
       for (const t of pool) {
@@ -655,8 +657,10 @@ export default function ExamSystem() {
         // HARD: Still no own-subject supervision even in relaxed mode
         if (ruleSubject && slot.subject && t.subject === slot.subject) continue;
         if (tr.assignedSlots.some(s => s.day === slot.day && !(slot.timeInfo.end <= s.start || slot.timeInfo.start >= s.end))) continue;
-        if (ruleDayLimit && tr.dayComm[slot.day] >= 1) continue;
-        const score = tr.totalHours * 500 + tr.totalComm * 10 + Math.random() * 0.1;
+        if (ruleDayLimit && tr.dayComm[slot.day] >= 2) continue;
+        const isAdmin = t.subject === 'Admin';
+        const adminPenalty = isAdmin ? 50000 : 0;
+        const score = tr.totalHours * 500 + tr.totalComm * 10 + adminPenalty + Math.random() * 0.1;
         candidates.push({ teacher: t, score });
       }
       if (candidates.length === 0) return null;
@@ -664,7 +668,7 @@ export default function ExamSystem() {
       return candidates[0].teacher;
     };
 
-    // ---- Fallback 3: Allow 2nd assignment same day (only time overlap + own-subject blocked) ----
+    // ---- Fallback 3: Allow 3rd assignment same day (only time overlap + own-subject blocked) ----
     const findBestForceDay = (blockedId: string | null, slot: Slot, pool: Teacher[]): Teacher | null => {
       const candidates: { teacher: Teacher; score: number }[] = [];
       for (const t of pool) {
@@ -673,7 +677,9 @@ export default function ExamSystem() {
         // HARD: Still no own-subject supervision even in force-day mode
         if (ruleSubject && slot.subject && t.subject === slot.subject) continue;
         if (tr.assignedSlots.some(s => s.day === slot.day && !(slot.timeInfo.end <= s.start || slot.timeInfo.start >= s.end))) continue;
-        const score = tr.totalHours * 500 + tr.totalComm * 10 + (tr.dayComm[slot.day] || 0) * 100 + Math.random() * 0.1;
+        const isAdmin = t.subject === 'Admin';
+        const adminPenalty = isAdmin ? 50000 : 0;
+        const score = tr.totalHours * 500 + tr.totalComm * 10 + (tr.dayComm[slot.day] || 0) * 100 + adminPenalty + Math.random() * 0.1;
         candidates.push({ teacher: t, score });
       }
       if (candidates.length === 0) return null;
@@ -714,10 +720,6 @@ export default function ExamSystem() {
         if (!t2) t2 = findBestForceDay(blocked, slot, allPool);
 
         if (t2) {
-          if (t2.subject === 'Admin') {
-            adminAssignmentCount[t2.id] = (adminAssignmentCount[t2.id] || 0) + 1;
-            totalAdminAssigned++;
-          }
           const tr = tracking[t2.id];
           tr.totalComm++; tr.dayComm[slot.day]++;
           tr.assignedSlots.push({ day: slot.day, start: slot.timeInfo.start, end: slot.timeInfo.end });
@@ -781,61 +783,9 @@ export default function ExamSystem() {
       }
     });
 
-    // ---- Post-distribution: Ensure admin gets at least 2 assignments ----
-    for (const admin of adminTeachers) {
-      const adminComm = tracking[admin.id].totalComm;
-      if (adminComm >= adminMinTarget) continue;
-      // Try to swap: find a teacher with > average hours who has an assignment
-      // that admin could take (passing all constraints)
-      const allTeacherHours = teachers.map(t => tracking[t.id]?.totalHours || 0).filter(h => h > 0);
-      const avgH = allTeacherHours.length > 0 ? allTeacherHours.reduce((a, b) => a + b, 0) / allTeacherHours.length : 0;
-      const overburdened = teachers.filter(t => t.id !== admin.id && tracking[t.id]?.totalHours > avgH);
-      // Sort by most overburdened first
-      overburdened.sort((a, b) => (tracking[b.id]?.totalHours || 0) - (tracking[a.id]?.totalHours || 0));
-
-      for (const victim of overburdened) {
-        if (tracking[admin.id].totalComm >= adminMinTarget) break;
-        // Find an assignment of victim that admin can take
-        for (const day of DAYS) {
-          if (tracking[admin.id].totalComm >= adminMinTarget) break;
-          const daySlots = teacherSlotsFromAssign[victim.id].filter(s => s.day === day);
-          if (daySlots.length === 0) continue;
-          // Admin already has assignment on this day?
-          if ((tracking[admin.id].dayComm[day] || 0) >= 1) continue;
-          // Find the session+committee for this slot
-          for (const sess of finalAssignments[day]) {
-            if (tracking[admin.id].totalComm >= adminMinTarget) break;
-            const sessTimeInfo = parseTimeRange(sess.time || '9:00-10:30');
-            if (daySlots[0].start !== sessTimeInfo.start || daySlots[0].end !== sessTimeInfo.end) continue;
-            // Check admin constraints
-            if (ruleSubject && sess.subject && admin.subject === sess.subject) continue;
-            if (!canSuperviseStage(admin, getStage(sess.grade))) continue;
-            // Check admin no time overlap (should be fine since we checked dayComm above)
-            if (tracking[admin.id].assignedSlots.some(s => s.day === day && !(sessTimeInfo.end <= s.start || sessTimeInfo.start >= s.end))) continue;
-            // Find which position (t1 or t2) victim has in this session
-            for (const c of sess.committees) {
-              if (c.t1?.id === victim.id || c.t2?.id === victim.id) {
-                // Check consecutive grade constraint
-                if (wasSameGradeAdjacent(tracking[admin.id], { day, dayIndex: DAYS.indexOf(day), grade: sess.grade, stage: getStage(sess.grade), subject: sess.subject, time: sess.time, timeInfo: sessTimeInfo, comId: 0 })) continue;
-                // Do the swap
-                const isT1 = c.t1?.id === victim.id;
-                const swappedTeacher = isT1 ? c.t1 : c.t2;
-                if (isT1) { c.t1 = { id: admin.id, name: admin.name }; }
-                else { c.t2 = { id: admin.id, name: admin.name }; }
-                // Update tracking: remove from victim, add to admin
-                tracking[victim.id].totalComm--;
-                tracking[victim.id].dayComm[day] = Math.max(0, (tracking[victim.id].dayComm[day] || 0) - 1);
-                tracking[admin.id].totalComm++;
-                tracking[admin.id].dayComm[day] = (tracking[admin.id].dayComm[day] || 0) + 1;
-                tracking[admin.id].assignedSlots.push({ day, start: sessTimeInfo.start, end: sessTimeInfo.end });
-                tracking[admin.id].gradeHistory.push({ dayIndex: DAYS.indexOf(day), grade: sess.grade });
-                break;
-              }
-            }
-          }
-        }
-      }
-    }
+    // ---- Post-distribution: Admin is LAST resort, no minimum targets ----
+    // Admin teachers only get assignments when no other teachers are available
+    // (handled by the heavy penalty in scoring)
 
     // ---- Post-distribution: BALANCE PASS ----
     // Iteratively swap assignments from overburdened → underburdened teachers
@@ -872,14 +822,15 @@ export default function ExamSystem() {
       // Try top-5 donors × bottom-5 recipients for wider swap search
       for (let di = 0; di < Math.min(sorted.length, 5) && !swapped; di++) {
         const donor = sorted[di];
-        // Don't strip admins below their minimum
+        // Don't strip admins below 1 assignment in balance pass
         const isDonorAdmin = donor.subject === 'Admin';
         if (tracking[donor.id].totalComm <= 1) continue;
-        if (isDonorAdmin && tracking[donor.id].totalComm <= adminMinTarget) continue;
 
         for (let ri = sorted.length - 1; ri >= Math.max(0, sorted.length - 5) && !swapped; ri--) {
           const recip = sorted[ri];
           if (donor.id === recip.id) continue;
+          // NEVER give admin more assignments during balance pass
+          if (recip.subject === 'Admin') continue;
           if (tracking[donor.id].totalHours <= tracking[recip.id].totalHours + 0.3) continue;
             // Also check if committees would be more balanced after swap
             const donorCommAfter = tracking[donor.id].totalComm - 1;
@@ -980,7 +931,7 @@ export default function ExamSystem() {
         // Find teachers NOT assigned on this day who can supervise this stage
         // AND whose subject doesn't match any exam subject for this stage today
         let candidates = teachers.filter(t => {
-          if ((tracking[t.id].dayComm[day] || 0) >= 1) return false;
+          if ((tracking[t.id].dayComm[day] || 0) >= 2) return false;
           if (todayStandby[day].has(t.id)) return false; // already standby for another stage today
           if (!canSuperviseStage(t, stage)) return false;
           // CRITICAL: Don't pick a teacher whose subject is being examined today
@@ -1572,9 +1523,9 @@ export default function ExamSystem() {
             </label>
             <div style={{ fontSize: 11, color: 'var(--text2)', lineHeight: 1.6, padding: '4px 0' }}>
               • Chronological day-by-day processing<br/>
-              • MAX 1 committee per teacher per day (hard rule)<br/>
-              • Admin participates normally (min 2 assignments)<br/>
-              • Hours balanced from actual assignments (no bugs)<br/>
+              • MAX 2 committees per teacher per day (hard rule)<br/>
+              • Admin subject = LAST resort (fewer assignments)<br/>
+              • Hours balanced from actual assignments<br/>
               • No same grade on consecutive days<br/>
               • No time overlap for same teacher
             </div>
@@ -1889,7 +1840,8 @@ export default function ExamSystem() {
                   <td style={{ color: 'var(--text2)' }}>{i + 1}</td>
                   <td style={{ fontWeight: 600, color: 'var(--text)' }}>{s.name}</td>
                   <td>
-                    <button className="action-btn edit-btn" onClick={() => { setEditingSupId(s.id); setSupFormName(s.name); setSupFormPass(''); }}>✏️ Edit</button>
+                    <button className="action-btn edit-btn" onClick={() => { setEditingSupId(s.id); setSupFormName(s.name); setSupFormPass(''); }}>Edit</button>
+                    <button className="action-btn del-btn" onClick={() => deleteSupervisor(s.id, s.name)}>Remove</button>
                   </td>
                 </tr>
               ))}
@@ -1948,7 +1900,7 @@ export default function ExamSystem() {
     { key: 'results', label: '📋 Results', adminOnly: false },
     { key: 'stats', label: '📊 Statistics', adminOnly: false, requiresResults: true },
     { key: 'users', label: '👥 Users', adminOnly: true },
-    { key: 'audit', label: '📝 Log', adminOnly: true },
+    { key: 'audit', label: '📝 Log', adminOnly: false },
   ];
 
   const visiblePages = pages.filter(p => {

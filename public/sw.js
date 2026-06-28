@@ -1,4 +1,4 @@
-const CACHE_NAME = 'exam-supervisor-v7';
+const CACHE_NAME = 'exam-supervisor-v8';
 const STATIC_ASSETS = [
   '/',
   '/manifest.json',
