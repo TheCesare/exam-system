@@ -21,9 +21,16 @@ export async function GET() {
 export async function PUT(request: NextRequest) {
   try {
     const body = await request.json()
+    // Always merge with existing data to never lose other fields (e.g. supervisors)
+    const { data: existing } = await supabase
+      .from('distribution_results')
+      .select('data')
+      .eq('id', SETTINGS_ID)
+      .single()
+    const merged = { ...(existing?.data || {}), ...body }
     const { error } = await supabase
       .from('distribution_results')
-      .upsert({ id: SETTINGS_ID, data: body }, { onConflict: 'id' })
+      .upsert({ id: SETTINGS_ID, data: merged }, { onConflict: 'id' })
     if (error) throw error
     return NextResponse.json({ success: true })
   } catch {
