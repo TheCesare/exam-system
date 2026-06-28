@@ -384,7 +384,21 @@ export default function ExamSystem() {
     setFormName(t.name);
     setFormSubject(t.subject);
     setFormNotes(t.notes);
-    setShowAddTeacher(true);
+  };
+
+  const inlineSave = async (id: string) => {
+    if (!formName.trim() || !formSubject) { showToast('Please complete all fields', 'error'); return; }
+    try {
+      await fetch('/api/teachers', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, name: formName.trim(), subject: formSubject, notes: formNotes.trim() })
+      });
+      logAudit('teacher_edited', `Edited: ${formName.trim()} (${formSubject})`);
+      showToast('Teacher updated', 'success');
+      setEditTeacherId(null);
+      loadTeachers();
+    } catch { showToast('Error saving teacher', 'error'); }
   };
 
   const saveTeacher = async () => {
@@ -421,6 +435,13 @@ export default function ExamSystem() {
 
   const cancelEdit = () => {
     setEditTeacherId(null);
+    setFormName('');
+    setFormSubject('');
+    setFormNotes('');
+    setShowAddTeacher(false);
+  };
+
+  const cancelAddForm = () => {
     setFormName('');
     setFormSubject('');
     setFormNotes('');
@@ -1404,7 +1425,7 @@ export default function ExamSystem() {
           </div>
           <div style={{ display: 'flex', gap: 10 }}>
             <button className="btn btn-primary" onClick={saveTeacher}>✓ Save Teacher</button>
-            <button className="btn btn-ghost" onClick={cancelEdit}>Cancel</button>
+            <button className="btn btn-ghost" onClick={cancelAddForm}>Cancel</button>
           </div>
         </div>
       )}
@@ -1427,7 +1448,23 @@ export default function ExamSystem() {
           <tbody>
             {teachers.length === 0 ? (
               <tr><td colSpan={5} style={{ textAlign: 'center', padding: 32 }}>No teachers loaded in registry.</td></tr>
-            ) : teachers.map((t, i) => (
+            ) : teachers.map((t, i) => editTeacherId === t.id ? (
+              <tr key={t.id} style={{ background: 'rgba(0,212,255,0.06)' }}>
+                <td style={{ fontWeight: 700, color: 'var(--accent)' }}>{i + 1}</td>
+                <td><input className="form-input" value={formName} onChange={e => setFormName(e.target.value)} style={{ margin: 0, padding: '6px 10px', fontSize: 13 }} autoFocus /></td>
+                <td>
+                  <select className="form-select" value={formSubject} onChange={e => setFormSubject(e.target.value)} style={{ margin: 0, padding: '6px 8px', fontSize: 13 }}>
+                    <option value="">-- Subject --</option>
+                    {SUBJECTS.map(s => <option key={s} value={s}>{s}</option>)}
+                  </select>
+                </td>
+                <td><input className="form-input" value={formNotes} onChange={e => setFormNotes(e.target.value)} placeholder="Stage notes" style={{ margin: 0, padding: '6px 10px', fontSize: 13 }} /></td>
+                <td style={{ display: 'flex', gap: 6 }}>
+                  <button className="action-btn edit-btn" onClick={() => inlineSave(t.id)} style={{ background: 'var(--success)', color: '#fff' }}>✓ Save</button>
+                  <button className="action-btn del-btn" onClick={() => setEditTeacherId(null)}>✕ Cancel</button>
+                </td>
+              </tr>
+            ) : (
               <tr key={t.id}>
                 <td>{i + 1}</td>
                 <td style={{ fontWeight: 600, color: 'var(--text)' }}>{t.name}</td>
@@ -1438,7 +1475,7 @@ export default function ExamSystem() {
                   {isAdmin && <button className="action-btn del-btn" onClick={() => deleteTeacher(t.id)}>✕ Remove</button>}
                 </td>
               </tr>
-            ))}
+            ))
           </tbody>
         </table>
       </div>
