@@ -1257,7 +1257,7 @@ export default function ExamSystem() {
                   else (e.target as HTMLElement).style.opacity = '1';
                 }}
               >
-                {loginMode === 'user' ? 'دخول' : 'دخول'}
+                {loginMode === 'user' ? 'Login' : 'Login'}
               </button>
               {loginError && <p style={{ color: 'var(--danger)', fontSize: 12, margin: '-4px 0 0' }}>{loginError}</p>}
             </div>
