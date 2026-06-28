@@ -1850,7 +1850,6 @@ export default function ExamSystem() {
                   <td style={{ fontWeight: 600, color: 'var(--text)' }}>{s.name}</td>
                   <td>
                     <button className="action-btn edit-btn" onClick={() => { setEditingSupId(s.id); setSupFormName(s.name); setSupFormPass(''); }}>✏️ Edit</button>
-                    <button className="action-btn del-btn" onClick={() => deleteSupervisor(s.id, s.name)}>✕ Remove</button>
                   </td>
                 </tr>
               ))}
