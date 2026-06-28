@@ -83,6 +83,7 @@ export default function ExamSystem() {
   const [view, setView] = useState<View>('login');
   const [password, setPassword] = useState('');
   const [loginError, setLoginError] = useState('');
+  const [loginMode, setLoginMode] = useState<'user' | 'admin' | null>(null);
   const [isConnected, setIsConnected] = useState(true);
   const [userCanEditTeachers, setUserCanEditTeachers] = useState(false);
 
@@ -285,6 +286,7 @@ export default function ExamSystem() {
     setView('login');
     setPassword('');
     setLoginError('');
+    setLoginMode(null);
     setTeachers([]);
     setSchedule([]);
     setResults(null);
@@ -1195,51 +1197,71 @@ export default function ExamSystem() {
         <style jsx>{`
           @keyframes pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.4;transform:scale(1.4)} }
         `}</style>
-        <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 16, padding: 48, maxWidth: 440, width: '90%', textAlign: 'center' }}>
+        <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 16, padding: 48, maxWidth: 400, width: '90%', textAlign: 'center' }}>
           <div style={{ width: 12, height: 12, background: 'var(--accent)', borderRadius: '50%', margin: '0 auto 16px', animation: 'pulse 2s infinite' }} />
           <h1 style={{ fontFamily: 'var(--mono)', fontSize: 16, color: 'var(--accent)', letterSpacing: 2, marginBottom: 8 }}>EXAM · SUPERVISOR</h1>
           <p style={{ color: 'var(--text2)', fontSize: 13, marginBottom: 32 }}>Exam Committee Distribution System</p>
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-            <div>
-              <input
-                type="password"
-                placeholder="User Password"
-                value={password}
-                onChange={e => { setPassword(e.target.value); setLoginError(''); }}
-                onKeyDown={e => e.key === 'Enter' && handleLogin('user')}
-                style={{ padding: '12px 16px', borderRadius: 10, background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text)', fontSize: 14, fontFamily: 'var(--sans)', outline: 'none', textAlign: 'center', width: '100%', marginBottom: 8 }}
-              />
+          {!loginMode ? (
+            /* Step 1: Choose role */
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
               <button
-                onClick={() => handleLogin('user')}
-                style={{ padding: '14px 24px', borderRadius: 10, background: 'var(--surface2)', border: '1px solid var(--border)', color: 'var(--text)', fontSize: 15, fontWeight: 600, cursor: 'pointer', fontFamily: 'var(--sans)', transition: 'all 0.2s', width: '100%' }}
-                onMouseOver={e => { (e.target as HTMLElement).style.borderColor = 'var(--accent)'; }}
-                onMouseOut={e => { (e.target as HTMLElement).style.borderColor = 'var(--border)'; }}
+                onClick={() => { setLoginMode('user'); setLoginError(''); setPassword(''); }}
+                style={{ padding: '18px 24px', borderRadius: 12, background: 'var(--surface2)', border: '1px solid var(--border)', color: 'var(--text)', fontSize: 16, fontWeight: 600, cursor: 'pointer', fontFamily: 'var(--sans)', transition: 'all 0.2s', width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10 }}
+                onMouseOver={e => { (e.target as HTMLElement).style.borderColor = 'var(--accent)'; (e.target as HTMLElement).style.background = 'rgba(0,212,255,0.05)'; }}
+                onMouseOut={e => { (e.target as HTMLElement).style.borderColor = 'var(--border)'; (e.target as HTMLElement).style.background = 'var(--surface2)'; }}
               >
-                👤 Enter as User
+                <span style={{ fontSize: 22 }}>👤</span> دخول كمستخدم
               </button>
-            </div>
-            <div style={{ color: 'var(--text2)', fontSize: 11, margin: '4px 0' }}>────── or ──────</div>
-            <div>
-              <input
-                type="password"
-                placeholder="Admin Password"
-                value={password}
-                onChange={e => { setPassword(e.target.value); setLoginError(''); }}
-                onKeyDown={e => e.key === 'Enter' && handleLogin('admin')}
-                style={{ padding: '12px 16px', borderRadius: 10, background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text)', fontSize: 14, fontFamily: 'var(--sans)', outline: 'none', textAlign: 'center', width: '100%', marginBottom: 8 }}
-              />
               <button
-                onClick={() => handleLogin('admin')}
-                style={{ padding: '14px 24px', borderRadius: 10, background: 'var(--accent2)', border: 'none', color: '#fff', fontSize: 15, fontWeight: 600, cursor: 'pointer', fontFamily: 'var(--sans)', transition: 'all 0.2s', width: '100%' }}
+                onClick={() => { setLoginMode('admin'); setLoginError(''); setPassword(''); }}
+                style={{ padding: '18px 24px', borderRadius: 12, background: 'var(--accent2)', border: 'none', color: '#fff', fontSize: 16, fontWeight: 600, cursor: 'pointer', fontFamily: 'var(--sans)', transition: 'all 0.2s', width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10 }}
                 onMouseOver={e => { (e.target as HTMLElement).style.background = '#e55a2b'; }}
                 onMouseOut={e => { (e.target as HTMLElement).style.background = 'var(--accent2)'; }}
               >
-                🔐 Enter as Admin
+                <span style={{ fontSize: 22 }}>🔐</span> دخول كادمن
               </button>
             </div>
-            {loginError && <p style={{ color: 'var(--danger)', fontSize: 12, margin: '-4px 0 0' }}>{loginError}</p>}
-          </div>
+          ) : (
+            /* Step 2: Enter password for chosen role */
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, marginBottom: 4, color: 'var(--text2)', fontSize: 13 }}>
+                <button onClick={() => { setLoginMode(null); setLoginError(''); setPassword(''); }} style={{ background: 'none', border: 'none', color: 'var(--text2)', cursor: 'pointer', fontSize: 16, padding: '0 4px', lineHeight: 1 }}>←</button>
+                <span>{loginMode === 'user' ? '👤 تسجيل دخول مستخدم' : '🔐 تسجيل دخول ادمن'}</span>
+              </div>
+              <input
+                type="password"
+                placeholder={loginMode === 'user' ? 'باسورد المستخدم' : 'باسورد الادمن'}
+                value={password}
+                onChange={e => { setPassword(e.target.value); setLoginError(''); }}
+                onKeyDown={e => e.key === 'Enter' && handleLogin(loginMode)}
+                autoFocus
+                style={{ padding: '14px 16px', borderRadius: 10, background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text)', fontSize: 15, fontFamily: 'var(--sans)', outline: 'none', textAlign: 'center', width: '100%' }}
+              />
+              <button
+                onClick={() => handleLogin(loginMode)}
+                style={{
+                  padding: '14px 24px', borderRadius: 10,
+                  background: loginMode === 'admin' ? 'var(--accent2)' : 'var(--accent)',
+                  border: loginMode === 'admin' ? 'none' : '1px solid var(--accent)',
+                  color: loginMode === 'admin' ? '#fff' : 'var(--bg)',
+                  fontSize: 15, fontWeight: 700, cursor: 'pointer', fontFamily: 'var(--sans)',
+                  transition: 'all 0.2s', width: '100%'
+                }}
+                onMouseOver={e => {
+                  if (loginMode === 'admin') (e.target as HTMLElement).style.background = '#e55a2b';
+                  else (e.target as HTMLElement).style.opacity = '0.85';
+                }}
+                onMouseOut={e => {
+                  if (loginMode === 'admin') (e.target as HTMLElement).style.background = 'var(--accent2)';
+                  else (e.target as HTMLElement).style.opacity = '1';
+                }}
+              >
+                {loginMode === 'user' ? 'دخول' : 'دخول'}
+              </button>
+              {loginError && <p style={{ color: 'var(--danger)', fontSize: 12, margin: '-4px 0 0' }}>{loginError}</p>}
+            </div>
+          )}
 
           <div style={{ marginTop: 24, fontSize: 11, color: 'var(--text2)' }}>
             <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: isConnected ? 'var(--success)' : 'var(--danger)', marginRight: 6 }} />
