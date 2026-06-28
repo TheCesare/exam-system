@@ -264,7 +264,7 @@ export default function ExamSystem() {
 
   // ========== AUTH ==========
   const handleLogin = async (role: 'user' | 'admin') => {
-    if (!password.trim()) { setLoginError('ادخل كلمة السر'); return; }
+    if (!password.trim()) { setLoginError('Please enter the password'); return; }
     try {
       const res = await fetch('/api/auth', {
         method: 'POST',
@@ -277,7 +277,7 @@ export default function ExamSystem() {
         loadAll();
         loadSettings();
       } else {
-        setLoginError(data.message || 'كلمة السر غلط');
+        setLoginError(data.message || 'Wrong password');
       }
     } catch { setLoginError('Connection error'); }
   };
