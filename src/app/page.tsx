@@ -598,6 +598,15 @@ export default function ExamSystem() {
       return tr.gradeHistory.some(h => Math.abs(h.dayIndex - slot.dayIndex) === 1 && h.grade === slot.grade);
     };
 
+    // ---- Helper: Special subject pairing rules ----
+    // Religion exam: Arabic + Religion teachers blocked
+    // Arabic exam: Religion teachers blocked from primary only
+    const isBlockedBySpecialRule = (teacher: Teacher, slot: Slot): boolean => {
+      if (slot.subject === 'Religion' && (teacher.subject === 'Arabic' || teacher.subject === 'Religion')) return true;
+      if (slot.subject === 'Arabic' && teacher.subject === 'Religion' && slot.stage === 'primary') return true;
+      return false;
+    };
+
     // ---- Helper: Fisher-Yates shuffle ----
     const shuffle = <T,>(arr: T[]): T[] => {
       const a = [...arr];
