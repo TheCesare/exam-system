@@ -617,6 +617,20 @@ export default function ExamSystem() {
       return a;
     };
 
+    // ---- Helper: Special subject exclusion rules (الدين/العربي) ----
+    // Rule 1: If exam subject is "الدين", teachers with subject "العربي" are excluded (الدين teachers already caught by own-subject)
+    // Rule 2: If exam subject is "العربي", teachers with subject "الدين" are excluded for primary stage only
+    const isSubjectExcluded = (t: Teacher, slot: Slot): boolean => {
+      if (!ruleSubject || !slot.subject) return false;
+      if (slot.subject === 'الدين') {
+        return t.subject === 'العربي';
+      }
+      if (slot.subject === 'العربي' && slot.stage === 'primary') {
+        return t.subject === 'الدين';
+      }
+      return false;
+    };
+
     // ---- Core: Find best teacher for a slot ----
     // HARD RULES: own-subject, stage notes, NO same-day double, time overlap
     // Scoring: hours dominate (500x), tiny noise (0.1) for variety
@@ -632,6 +646,8 @@ export default function ExamSystem() {
         const tr = tracking[t.id];
         // HARD: No own-subject supervision
         if (ruleSubject && slot.subject && t.subject === slot.subject) continue;
+        // HARD: Special subject exclusion (الدين/العربي rules)
+        if (isSubjectExcluded(t, slot)) continue;
         // HARD: Stage notes filtering
         if (!canSuperviseStage(t, slot.stage)) continue;
         // HARD: No time overlap on same day
@@ -662,6 +678,8 @@ export default function ExamSystem() {
         const tr = tracking[t.id];
         // HARD: Still no own-subject supervision even in relaxed mode
         if (ruleSubject && slot.subject && t.subject === slot.subject) continue;
+        // HARD: Special subject exclusion (الدين/العربي rules) — never relaxed
+        if (isSubjectExcluded(t, slot)) continue;
         if (tr.assignedSlots.some(s => s.day === slot.day && !(slot.timeInfo.end <= s.start || slot.timeInfo.start >= s.end))) continue;
         if (ruleDayLimit && tr.dayComm[slot.day] >= 2) continue;
         const isAdmin = t.subject === 'Admin';
@@ -682,6 +700,8 @@ export default function ExamSystem() {
         const tr = tracking[t.id];
         // HARD: Still no own-subject supervision even in force-day mode
         if (ruleSubject && slot.subject && t.subject === slot.subject) continue;
+        // HARD: Special subject exclusion (الدين/العربي rules) — never relaxed
+        if (isSubjectExcluded(t, slot)) continue;
         if (tr.assignedSlots.some(s => s.day === slot.day && !(slot.timeInfo.end <= s.start || slot.timeInfo.start >= s.end))) continue;
         // HARD: ABSOLUTE MAX 2 committees per teacher per day (never exceeded)
         if (ruleDayLimit && tr.dayComm[slot.day] >= 2) continue;
@@ -878,6 +898,7 @@ export default function ExamSystem() {
 
               // Check recipient constraints
               if (ruleSubject && sess.subject && recip.subject === sess.subject) continue;
+              if (isSubjectExcluded(recip, { day, dayIndex: DAYS.indexOf(day), grade: sess.grade, stage: getStage(sess.grade), subject: sess.subject, time: sess.time, timeInfo: sessTI, comId: 0 })) continue;
               if (!canSuperviseStage(recip, getStage(sess.grade))) continue;
               if (tracking[recip.id].assignedSlots.some(s => s.day === day && !(sessTI.end <= s.start || sessTI.start >= s.end))) continue;
               if (wasSameGradeAdjacent(tracking[recip.id], { day, dayIndex: DAYS.indexOf(day), grade: sess.grade, stage: getStage(sess.grade), subject: sess.subject, time: sess.time, timeInfo: sessTI, comId: 0 })) continue;
@@ -964,6 +985,9 @@ export default function ExamSystem() {
           if (!canSuperviseStage(t, stage)) return false;
           // CRITICAL: Don't pick a teacher whose subject is being examined today
           if (ruleSubject && t.subject && dayStageSubjects.has(t.subject)) return false;
+          // CRITICAL: Special subject exclusion (الدين/العربي) for standby
+          if (ruleSubject && dayStageSubjects.has('الدين') && (t.subject === 'الدين' || t.subject === 'العربي')) return false;
+          if (ruleSubject && dayStageSubjects.has('العربي') && t.subject === 'الدين' && stage === 'primary') return false;
           return true;
         });
 
@@ -1061,6 +1085,26 @@ export default function ExamSystem() {
               violations.push(`${t1Info?.name} + ${t2Info?.name} -> both classified on ${day} (${sess.grade})`);
             }
           }
+        }
+      }
+    }
+
+    // V-Check 6: Special subject exclusion (الدين/العربي rules)
+    for (const day of DAYS) {
+      for (const sess of finalAssignments[day]) {
+        const sessStage = getStage(sess.grade);
+        for (const c of sess.committees) {
+          [c.t1, c.t2].forEach(who => {
+            if (!who.id) return;
+            const tch = teachers.find(x => x.id === who.id);
+            if (!tch) return;
+            if (sess.subject === 'الدين' && (tch.subject === 'العربي' || tch.subject === 'الدين')) {
+              violations.push(`${tch.name} -> excluded subject for الدين exam on ${day}`);
+            }
+            if (sess.subject === 'العربي' && tch.subject === 'الدين' && sessStage === 'primary') {
+              violations.push(`${tch.name} -> الدين excluded from primary العربي exam on ${day}`);
+            }
+          });
         }
       }
     }
