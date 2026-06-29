@@ -19,13 +19,13 @@ async function saveSettings(settings: Record<string, unknown>) {
     .upsert({ id: SETTINGS_ID, data: settings }, { onConflict: 'id' })
 }
 
-// GET: return list of supervisors (names only, no passwords)
+// GET: return list of supervisors (names + permissions, no passwords)
 export async function GET() {
   try {
     const settings = await getSettings()
-    const supervisors: { id: string; name: string }[] = (settings.supervisors as any[]) || []
-    // Never send passwords to client
-    return NextResponse.json(supervisors.map(s => ({ id: s.id, name: s.name })))
+      const allSupervisors: any[] = (settings.supervisors as any[]) || []
+      // Never send passwords to client; include permissions
+      return NextResponse.json(allSupervisors.map((s: any) => ({ id: s.id, name: s.name, permissions: s.permissions || [] })))
   } catch {
     return NextResponse.json([], { status: 500 })
   }
@@ -34,13 +34,13 @@ export async function GET() {
 // POST: admin adds/edits a supervisor
 export async function POST(request: NextRequest) {
   try {
-    const { id, name, password } = await request.json()
+    const { id, name, password, permissions } = await request.json()
     if (!name || !password) {
       return NextResponse.json({ error: 'Name and password required' }, { status: 400 })
     }
 
     const settings = await getSettings()
-    const supervisors: { id: string; name: string; password: string }[] = (settings.supervisors as any[]) || []
+    const supervisors: { id: string; name: string; password: string; permissions?: string[] }[] = (settings.supervisors as any[]) || []
 
     if (id) {
       // Edit existing
@@ -48,16 +48,17 @@ export async function POST(request: NextRequest) {
       if (idx >= 0) {
         supervisors[idx].name = name
         if (password) supervisors[idx].password = password
+        if (Array.isArray(permissions)) supervisors[idx].permissions = permissions
       }
     } else {
       // Add new
       const newId = 'sup_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8)
-      supervisors.push({ id: newId, name, password })
+      supervisors.push({ id: newId, name, password, permissions: Array.isArray(permissions) ? permissions : [] })
     }
 
     settings.supervisors = supervisors
     await saveSettings(settings)
-    return NextResponse.json({ success: true, supervisors: supervisors.map(s => ({ id: s.id, name: s.name })) })
+    return NextResponse.json({ success: true, supervisors: supervisors.map(s => ({ id: s.id, name: s.name, permissions: s.permissions || [] })) })
   } catch {
     return NextResponse.json({ error: 'Failed' }, { status: 500 })
   }

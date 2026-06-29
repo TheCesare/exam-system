@@ -17,7 +17,7 @@ export async function POST(request: NextRequest) {
         .single()
 
       const settings = (data?.data as Record<string, any>) || {}
-      const supervisors: { id: string; name: string; password: string }[] = settings.supervisors || []
+      const supervisors: { id: string; name: string; password: string; permissions?: string[] }[] = settings.supervisors || []
 
       if (!name) {
         return NextResponse.json({ success: false, message: 'Please select your name' }, { status: 400 })
@@ -25,7 +25,7 @@ export async function POST(request: NextRequest) {
 
       const supervisor = supervisors.find(s => s.name === name && s.password === password)
       if (supervisor) {
-        return NextResponse.json({ success: true, role: 'user', name: supervisor.name })
+        return NextResponse.json({ success: true, role: 'user', name: supervisor.name, permissions: supervisor.permissions || [] })
       }
       return NextResponse.json({ success: false, message: 'Wrong password' }, { status: 401 })
     }

@@ -89,15 +89,17 @@ export default function ExamSystem() {
   const [loginMode, setLoginMode] = useState<'user' | 'admin' | null>(null);
   const [isConnected, setIsConnected] = useState(true);
   const [userCanEditTeachers, setUserCanEditTeachers] = useState(false);
+  const [userPermissions, setUserPermissions] = useState<string[]>([]);
 
   // Multi-user state
-  const [supervisors, setSupervisors] = useState<{ id: string; name: string }[]>([]);
+  const [supervisors, setSupervisors] = useState<{ id: string; name: string; permissions?: string[] }[]>([]);
   const [selectedSupervisor, setSelectedSupervisor] = useState('');
   const [currentUser, setCurrentUser] = useState('');
   const [auditLog, setAuditLog] = useState<{ id: string; timestamp: string; user: string; action: string; details: string }[]>([]);
   const [supFormName, setSupFormName] = useState('');
   const [supFormPass, setSupFormPass] = useState('');
   const [editingSupId, setEditingSupId] = useState<string | null>(null);
+  const [supFormPermissions, setSupFormPermissions] = useState<string[]>([]);
 
   // Data state
   const [teachers, setTeachers] = useState<Teacher[]>([]);
@@ -266,9 +268,10 @@ export default function ExamSystem() {
     const saved = sessionStorage.getItem('exam_auth');
     if (saved) {
       try {
-        const { role, name } = JSON.parse(saved);
+        const { role, name, permissions } = JSON.parse(saved);
         setView(role);
         setCurrentUser(name || 'Admin');
+        if (permissions) setUserPermissions(permissions);
         loadAll();
         if (role === 'admin') { loadSupervisors(); loadAuditLog(); }
         else { loadSupervisors(); }
@@ -339,9 +342,11 @@ export default function ExamSystem() {
       const data = await res.json();
       if (data.success) {
         const userName = role === 'user' ? (data.name || selectedSupervisor) : 'Admin';
+        const perms = data.permissions || [];
         setCurrentUser(userName);
         setView(data.role);
-        sessionStorage.setItem('exam_auth', JSON.stringify({ role: data.role, name: userName }));
+        setUserPermissions(perms);
+        sessionStorage.setItem('exam_auth', JSON.stringify({ role: data.role, name: userName, permissions: perms }));
         loadAll();
         loadSettings();
         if (role === 'admin') { loadSupervisors(); loadAuditLog(); }
@@ -363,6 +368,7 @@ export default function ExamSystem() {
     setSchedule([]);
     setResults(null);
     setUserCanEditTeachers(false);
+    setUserPermissions([]);
   };
 
   // ========== TEACHER ACTIONS ==========
@@ -383,7 +389,7 @@ export default function ExamSystem() {
   };
 
   const startEdit = (t: Teacher) => {
-    if (!isAdmin && !userCanEditTeachers) { showToast('No edit permission - ask admin', 'error'); return; }
+    if (!canEdit) { showToast('No edit permission - ask admin', 'error'); return; }
     setEditTeacherId(t.id);
     setFormName(t.name);
     setFormSubject(t.subject);
@@ -407,7 +413,7 @@ export default function ExamSystem() {
 
   const saveTeacher = async () => {
     if (!formName.trim() || !formSubject) { showToast('Please complete all fields', 'error'); return; }
-    if (!isAdmin && !userCanEditTeachers) { showToast('No permission - ask admin', 'error'); return; }
+    if (!canEdit) { showToast('No permission - ask admin', 'error'); return; }
     try {
       if (editTeacherId) {
         await fetch('/api/teachers', {
@@ -617,9 +623,9 @@ export default function ExamSystem() {
       return a;
     };
 
-    // ---- Helper: Special subject exclusion rules (الدين/العربي) ----
-    // Rule 1: If exam subject is "الدين", teachers with subject "العربي" are excluded (الدين teachers already caught by own-subject)
-    // Rule 2: If exam subject is "العربي", teachers with subject "الدين" are excluded for primary stage only
+    // ---- Helper: Special subject exclusion rules (Religion/Arabic) ----
+    // Rule 1: If exam subject is Religion (الدين), teachers with subject Arabic (العربي) are excluded (Religion teachers already caught by own-subject)
+    // Rule 2: If exam subject is Arabic (العربي), teachers with subject Religion (الدين) are excluded for primary stage only
     const isSubjectExcluded = (t: Teacher, slot: Slot): boolean => {
       if (!ruleSubject || !slot.subject) return false;
       if (slot.subject === 'الدين') {
@@ -646,7 +652,7 @@ export default function ExamSystem() {
         const tr = tracking[t.id];
         // HARD: No own-subject supervision
         if (ruleSubject && slot.subject && t.subject === slot.subject) continue;
-        // HARD: Special subject exclusion (الدين/العربي rules)
+        // HARD: Special subject exclusion (Religion/Arabic rules)
         if (isSubjectExcluded(t, slot)) continue;
         // HARD: Stage notes filtering
         if (!canSuperviseStage(t, slot.stage)) continue;
@@ -678,7 +684,7 @@ export default function ExamSystem() {
         const tr = tracking[t.id];
         // HARD: Still no own-subject supervision even in relaxed mode
         if (ruleSubject && slot.subject && t.subject === slot.subject) continue;
-        // HARD: Special subject exclusion (الدين/العربي rules) — never relaxed
+        // HARD: Special subject exclusion (Religion/Arabic rules) — never relaxed
         if (isSubjectExcluded(t, slot)) continue;
         if (tr.assignedSlots.some(s => s.day === slot.day && !(slot.timeInfo.end <= s.start || slot.timeInfo.start >= s.end))) continue;
         if (ruleDayLimit && tr.dayComm[slot.day] >= 2) continue;
@@ -700,7 +706,7 @@ export default function ExamSystem() {
         const tr = tracking[t.id];
         // HARD: Still no own-subject supervision even in force-day mode
         if (ruleSubject && slot.subject && t.subject === slot.subject) continue;
-        // HARD: Special subject exclusion (الدين/العربي rules) — never relaxed
+        // HARD: Special subject exclusion (Religion/Arabic rules) — never relaxed
         if (isSubjectExcluded(t, slot)) continue;
         if (tr.assignedSlots.some(s => s.day === slot.day && !(slot.timeInfo.end <= s.start || slot.timeInfo.start >= s.end))) continue;
         // HARD: ABSOLUTE MAX 2 committees per teacher per day (never exceeded)
@@ -717,7 +723,15 @@ export default function ExamSystem() {
 
     // ---- Process each day chronologically, shuffle slots within day for variety ----
     let standbyCount = 0;
-    const nonAdminTeachers = teachers.filter(t => t.subject !== 'Admin');
+
+    // ---- 'Old' teacher handling: senior teachers excluded from default pool, used as last resort ----
+    const isOldTeacher = (t: Teacher) => !!(t.notes && t.notes.toLowerCase().includes('old'));
+    const oldTeachers = teachers.filter(t => t.subject !== 'Admin' && isOldTeacher(t));
+    const nonAdminTeachers = teachers.filter(t => t.subject !== 'Admin' && !isOldTeacher(t));
+
+    // Track old teacher supervision days (max 3, min 1)
+    const oldTeacherDays: Record<string, number> = {};
+    oldTeachers.forEach(t => { oldTeacherDays[t.id] = 0; });
 
     // Calculate Week 2 peak days (days with above-average committee count)
     const w2SlotCounts = WEEK2_DAYS.map(d => slotsByDay[d].length).filter(c => c > 0);
@@ -735,17 +749,35 @@ export default function ExamSystem() {
         let t1: Teacher | null = null;
         let t2: Teacher | null = null;
 
-        // T1: strict → relax consecutive → relax subject+stage → allow 2nd same-day
+        // Helper: filter old teachers not exceeding 3-day max and not already assigned today
+        const availableOldTeachers = (blockedId: string | null, day: string) => {
+          return oldTeachers.filter(ot => {
+            if (blockedId && ot.id === blockedId) return false;
+            if ((oldTeacherDays[ot.id] || 0) >= 3) return false;
+            const tr = tracking[ot.id];
+            if (tr.assignedSlots.some(s => s.day === day && !(slot.timeInfo.end <= s.start || slot.timeInfo.start >= s.end))) return false;
+            return true;
+          });
+        };
+
+        // T1: strict → relax consecutive → relax subject+stage → allow 2nd same-day → OLD teacher last resort
         t1 = findBest(null, slot, dayPool, false);
         if (!t1) t1 = findBest(null, slot, dayPool, true); // relax consecutive-day
         if (!t1) t1 = findBestRelaxed(null, slot, dayPool); // relax subject + stage
         if (!t1) t1 = findBestForceDay(null, slot, dayPool); // allow 2nd assignment same day
+        // Last resort: try old teachers (max 3 days)
+        if (!t1) t1 = findBest(null, slot, availableOldTeachers(null, slot.day), false);
+        if (!t1) t1 = findBestRelaxed(null, slot, availableOldTeachers(null, slot.day));
 
         if (t1) {
           const tr = tracking[t1.id];
           tr.totalComm++; tr.dayComm[slot.day]++;
           tr.assignedSlots.push({ day: slot.day, start: slot.timeInfo.start, end: slot.timeInfo.end });
           tr.gradeHistory.push({ dayIndex: slot.dayIndex, grade: slot.grade });
+          // Track old teacher days
+          if (isOldTeacher(t1) && !tr.assignedSlots.some((s, idx) => idx < tr.assignedSlots.length - 1 && s.day === slot.day)) {
+            oldTeacherDays[t1.id] = (oldTeacherDays[t1.id] || 0) + 1;
+          }
         } else { standbyCount++; }
 
         // T2: pairing rule — classified teacher (has notes) must pair with unclassified
@@ -764,12 +796,22 @@ export default function ExamSystem() {
           if (!t2) t2 = findBestRelaxed(blocked, slot, dayPool);
           if (!t2) t2 = findBestForceDay(blocked, slot, dayPool);
         }
+        // Last resort: try old teachers for T2
+        if (!t2) {
+          const oldPool = availableOldTeachers(blocked, slot.day);
+          t2 = findBest(blocked, slot, oldPool, false);
+          if (!t2) t2 = findBestRelaxed(blocked, slot, oldPool);
+        }
 
         if (t2) {
           const tr = tracking[t2.id];
           tr.totalComm++; tr.dayComm[slot.day]++;
           tr.assignedSlots.push({ day: slot.day, start: slot.timeInfo.start, end: slot.timeInfo.end });
           tr.gradeHistory.push({ dayIndex: slot.dayIndex, grade: slot.grade });
+          // Track old teacher days
+          if (isOldTeacher(t2) && !tr.assignedSlots.some((s, idx) => idx < tr.assignedSlots.length - 1 && s.day === slot.day)) {
+            oldTeacherDays[t2.id] = (oldTeacherDays[t2.id] || 0) + 1;
+          }
         } else { standbyCount++; }
 
         // Record assignment
@@ -867,14 +909,17 @@ export default function ExamSystem() {
       for (let di = 0; di < Math.min(sorted.length, 5) && !swapped; di++) {
         const donor = sorted[di];
         // Don't strip admins below 1 assignment in balance pass
-        const isDonorAdmin = donor.subject === 'Admin';
+        // Never swap OUT old teachers (they are last-resort only)
         if (tracking[donor.id].totalComm <= 1) continue;
+        if (isOldTeacher(donor)) continue;
 
         for (let ri = sorted.length - 1; ri >= Math.max(0, sorted.length - 5) && !swapped; ri--) {
           const recip = sorted[ri];
           if (donor.id === recip.id) continue;
           // NEVER give admin more assignments during balance pass
+          // Old teachers CAN be recipients (swapped IN) but check their day limit
           if (recip.subject === 'Admin') continue;
+          if (isOldTeacher(recip) && (oldTeacherDays[recip.id] || 0) >= 3) continue;
           if (tracking[donor.id].totalHours <= tracking[recip.id].totalHours + 0.3) continue;
             // Also check if committees would be more balanced after swap
             const donorCommAfter = tracking[donor.id].totalComm - 1;
@@ -922,6 +967,11 @@ export default function ExamSystem() {
                 tracking[recip.id].dayComm[day] = (tracking[recip.id].dayComm[day] || 0) + 1;
                 tracking[recip.id].assignedSlots.push({ day, start: sessTI.start, end: sessTI.end });
                 tracking[recip.id].gradeHistory.push({ dayIndex: DAYS.indexOf(day), grade: sess.grade });
+
+                // Track old teacher day if recipient is old
+                if (isOldTeacher(recip)) {
+                  oldTeacherDays[recip.id] = (oldTeacherDays[recip.id] || 0) + 1;
+                }
 
                 swapped = true;
                 break;
@@ -985,7 +1035,7 @@ export default function ExamSystem() {
           if (!canSuperviseStage(t, stage)) return false;
           // CRITICAL: Don't pick a teacher whose subject is being examined today
           if (ruleSubject && t.subject && dayStageSubjects.has(t.subject)) return false;
-          // CRITICAL: Special subject exclusion (الدين/العربي) for standby
+          // CRITICAL: Special subject exclusion (Religion/Arabic) for standby
           if (ruleSubject && dayStageSubjects.has('الدين') && (t.subject === 'الدين' || t.subject === 'العربي')) return false;
           if (ruleSubject && dayStageSubjects.has('العربي') && t.subject === 'الدين' && stage === 'primary') return false;
           return true;
@@ -1089,7 +1139,7 @@ export default function ExamSystem() {
       }
     }
 
-    // V-Check 6: Special subject exclusion (الدين/العربي rules)
+    // V-Check 6: Special subject exclusion (Religion/Arabic rules)
     for (const day of DAYS) {
       for (const sess of finalAssignments[day]) {
         const sessStage = getStage(sess.grade);
@@ -1099,13 +1149,21 @@ export default function ExamSystem() {
             const tch = teachers.find(x => x.id === who.id);
             if (!tch) return;
             if (sess.subject === 'الدين' && (tch.subject === 'العربي' || tch.subject === 'الدين')) {
-              violations.push(`${tch.name} -> excluded subject for الدين exam on ${day}`);
+              violations.push(`${tch.name} -> excluded subject for Religion exam on ${day}`);
             }
             if (sess.subject === 'العربي' && tch.subject === 'الدين' && sessStage === 'primary') {
-              violations.push(`${tch.name} -> الدين excluded from primary العربي exam on ${day}`);
+              violations.push(`${tch.name} -> Religion excluded from primary Arabic exam on ${day}`);
             }
           });
         }
+      }
+    }
+
+    // V-Check 7: Old teacher day count must be between 1-3
+    for (const ot of oldTeachers) {
+      const days = oldTeacherDays[ot.id] || 0;
+      if (days > 3) {
+        violations.push(`${ot.name} -> old teacher assigned ${days} days (max 3)`);
       }
     }
 
@@ -1425,15 +1483,28 @@ export default function ExamSystem() {
   }
 
   const isAdmin = view === 'admin';
+  const canEdit = isAdmin || userPermissions.includes('teachers') || userPermissions.includes('schedule');
   const roleLabel = isAdmin ? 'ADMIN' : currentUser || 'USER';
   const roleColor = isAdmin ? 'var(--accent2)' : 'var(--accent3)';
+
+  // ========== PERMISSIONS: Page access control ==========
+  const canAccessPage = (page: Page): boolean => {
+    if (page === 'distribute' || page === 'log') return isAdmin; // Always admin-only
+    if (isAdmin) return true; // Admin sees all
+    // Regular user: default access to teachers (view), results, stats
+    if (!userPermissions || userPermissions.length === 0) {
+      return page === 'teachers' || page === 'results' || page === 'stats';
+    }
+    // User with specific permissions: only those pages
+    return userPermissions.includes(page);
+  };
 
   // ========== TEACHERS PAGE ==========
   const renderTeachersPage = () => (
     <div className="card">
       <div className="card-header">
         <div className="card-title">Teacher Registry</div>
-        {(isAdmin || userCanEditTeachers) && (
+        {(isAdmin || canEdit) && (
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
           {isAdmin && <button className="btn btn-demo" onClick={generateDemoTeachers}>🧪 Generate 200 Mock Teachers</button>}
           {isAdmin && <button className="btn btn-ghost" onClick={importCSV}>📂 Import CSV</button>}
@@ -1638,7 +1709,7 @@ export default function ExamSystem() {
   const renderResultsPage = () => {
     if (!results?.assignments) return <div className="card"><div className="empty-state"><p>Execute the distribution engine to view results</p></div></div>;
 
-    const STAGE_LABELS: Record<string, string> = { primary: 'ابتدائي', prep: 'اعدادي', sec: 'ثانوي' };
+    const STAGE_LABELS: Record<string, string> = { primary: 'Primary', prep: 'Prep', sec: 'Secondary' };
     const STAGE_COLORS: Record<string, string> = { primary: '#f59e0b', prep: '#8b5cf6', sec: '#06b6d4' };
 
     return (
@@ -1704,7 +1775,7 @@ export default function ExamSystem() {
                 {/* Standby section */}
                 {hasStandby && (
                   <div style={{ marginTop: 12, background: 'rgba(245,158,11,0.06)', border: '1px solid rgba(245,158,11,0.2)', borderRadius: 10, padding: '12px 16px' }}>
-                    <div style={{ fontSize: 13, fontWeight: 700, color: '#f59e0b', marginBottom: 8 }}>📍 المدرسين المتاحين (احتياطي)</div>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: '#f59e0b', marginBottom: 8 }}>📍 Available Teachers (Standby)</div>
                     {['primary', 'prep', 'sec'].map(stage => {
                       const stList = dayStandbys?.[stage] || [];
                       if (stList.length === 0) return null;
@@ -1869,14 +1940,14 @@ export default function ExamSystem() {
         const res = await fetch('/api/supervisors', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ id: editingSupId, name: supFormName.trim(), password: supFormPass })
+          body: JSON.stringify({ id: editingSupId, name: supFormName.trim(), password: supFormPass, permissions: supFormPermissions })
         });
         if (res.ok) {
           const data = await res.json();
           setSupervisors(data.supervisors);
           logAudit(editingSupId ? 'user_edited' : 'user_added', `${editingSupId ? 'Edited' : 'Added'} supervisor: ${supFormName.trim()}`);
           showToast(editingSupId ? 'User updated' : 'User added', 'success');
-          setSupFormName(''); setSupFormPass(''); setEditingSupId(null);
+          setSupFormName(''); setSupFormPass(''); setEditingSupId(null); setSupFormPermissions([]);
         }
       } catch { showToast('Error saving user', 'error'); }
     };
@@ -1914,8 +1985,27 @@ export default function ExamSystem() {
                 {editingSupId ? '✓ Update' : '+ Add User'}
               </button>
               {editingSupId && (
-                <button className="btn btn-ghost" onClick={() => { setEditingSupId(null); setSupFormName(''); setSupFormPass(''); }}>Cancel</button>
+                <button className="btn btn-ghost" onClick={() => { setEditingSupId(null); setSupFormName(''); setSupFormPass(''); setSupFormPermissions([]); }}>Cancel</button>
               )}
+            </div>
+          </div>
+          <div style={{ marginTop: 12, padding: '12px 16px', background: 'var(--surface)', borderRadius: 8, border: '1px solid var(--border)' }}>
+            <div style={{ fontSize: 12, color: 'var(--text2)', marginBottom: 10, fontWeight: 600 }}>Access Permissions:</div>
+            <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap' }}>
+              {['teachers', 'schedule', 'results', 'stats'].map(perm => (
+                <label key={perm} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer', color: 'var(--text)' }}>
+                  <input
+                    type="checkbox"
+                    checked={supFormPermissions.includes(perm)}
+                    onChange={e => {
+                      if (e.target.checked) setSupFormPermissions(prev => [...prev, perm]);
+                      else setSupFormPermissions(prev => prev.filter(p => p !== perm));
+                    }}
+                    style={{ width: 16, height: 16, accentColor: 'var(--accent)' }}
+                  />
+                  {perm === 'teachers' ? 'Teachers Page' : perm === 'schedule' ? 'Schedule Page' : perm === 'results' ? 'Results Page' : 'Statistics Page'}
+                </label>
+              ))}
             </div>
           </div>
         </div>
@@ -1923,18 +2013,23 @@ export default function ExamSystem() {
           <table>
             <thead>
               <tr>
-                <th>#</th><th>Name</th><th>Actions</th>
+                <th>#</th><th>Name</th><th>Permissions</th><th>Actions</th>
               </tr>
             </thead>
             <tbody>
               {supervisors.length === 0 ? (
-                <tr><td colSpan={3} style={{ textAlign: 'center', padding: 32, color: 'var(--text2)' }}>No supervisors added yet. Add users above.</td></tr>
+                <tr><td colSpan={4} style={{ textAlign: 'center', padding: 32, color: 'var(--text2)' }}>No supervisors added yet. Add users above.</td></tr>
               ) : supervisors.map((s, i) => (
                 <tr key={s.id}>
                   <td style={{ color: 'var(--text2)' }}>{i + 1}</td>
                   <td style={{ fontWeight: 600, color: 'var(--text)' }}>{s.name}</td>
+                  <td style={{ fontSize: 12 }}>
+                    {(s.permissions && s.permissions.length > 0) ? s.permissions.map(p => (
+                      <span key={p} className="badge badge-blue" style={{ marginRight: 4 }}>{p}</span>
+                    )) : <span style={{ color: 'var(--text2)' }}>Default (view only)</span>}
+                  </td>
                   <td>
-                    <button className="action-btn edit-btn" onClick={() => { setEditingSupId(s.id); setSupFormName(s.name); setSupFormPass(''); }}>Edit</button>
+                    <button className="action-btn edit-btn" onClick={() => { setEditingSupId(s.id); setSupFormName(s.name); setSupFormPass(''); setSupFormPermissions(s.permissions || []); }}>Edit</button>
                     <button className="action-btn del-btn" onClick={() => deleteSupervisor(s.id, s.name)}>Remove</button>
                   </td>
                 </tr>
@@ -2028,7 +2123,7 @@ export default function ExamSystem() {
   ];
 
   const visiblePages = pages.filter(p => {
-    if (p.adminOnly && !isAdmin) return false;
+    if (!canAccessPage(p.key)) return false;
     if (p.requiresResults && !hasResults) return false;
     return true;
   });
