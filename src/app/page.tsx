@@ -39,7 +39,8 @@ interface DistributionResults {
 }
 
 type View = 'login' | 'user' | 'admin';
-type Page = 'teachers' | 'schedule' | 'distribute' | 'results' | 'stats' | 'users' | 'admin-log' | 'user-log';
+type Page = 'teachers' | 'schedule' | 'distribute' | 'results' | 'stats' | 'users' | 'log';
+type LogView = 'admin' | 'users';
 
 // ========== HELPERS ==========
 function parseTimeRange(tStr: string) {
@@ -115,6 +116,9 @@ export default function ExamSystem() {
 
   // Schedule edit buffer (local edits before saving)
   const [scheduleBuffer, setScheduleBuffer] = useState<Record<string, ScheduleCell>>({});
+
+  // Log sub-page state
+  const [logView, setLogView] = useState<LogView>('admin');
 
   // Ref for Supabase realtime channels
   const channelsRef = useRef<RealtimeChannel[]>([]);
@@ -715,12 +719,22 @@ export default function ExamSystem() {
           tr.gradeHistory.push({ dayIndex: slot.dayIndex, grade: slot.grade });
         } else { standbyCount++; }
 
-        // T2: same pool, blocked=T1, cascade fallbacks
+        // T2: pairing rule — classified teacher (has notes) must pair with unclassified
         const blocked = t1?.id || null;
-        t2 = findBest(blocked, slot, dayPool, false);
-        if (!t2) t2 = findBest(blocked, slot, dayPool, true);
-        if (!t2) t2 = findBestRelaxed(blocked, slot, dayPool);
-        if (!t2) t2 = findBestForceDay(blocked, slot, dayPool);
+        const t1Classified = t1 ? !!(t1.notes && t1.notes.trim() !== '') : false;
+        const t2Filtered = t1Classified ? dayPool.filter(t => t.id !== blocked && (!t.notes || t.notes.trim() === '')) : dayPool;
+
+        t2 = findBest(blocked, slot, t2Filtered, false);
+        if (!t2) t2 = findBest(blocked, slot, t2Filtered, true);
+        if (!t2) t2 = findBestRelaxed(blocked, slot, t2Filtered);
+        if (!t2) t2 = findBestForceDay(blocked, slot, t2Filtered);
+        // Relax pairing rule if no unclassified teacher available
+        if (!t2 && t1Classified) {
+          t2 = findBest(blocked, slot, dayPool, false);
+          if (!t2) t2 = findBest(blocked, slot, dayPool, true);
+          if (!t2) t2 = findBestRelaxed(blocked, slot, dayPool);
+          if (!t2) t2 = findBestForceDay(blocked, slot, dayPool);
+        }
 
         if (t2) {
           const tr = tracking[t2.id];
@@ -1020,6 +1034,23 @@ export default function ExamSystem() {
                 if (tch && !canSuperviseStage(tch, stage)) violations.push(`${tch.name} -> wrong stage (${stage}) notes="${tch.notes}" on ${day}`);
               }
             });
+          }
+        }
+      }
+    }
+
+    // V-Check 5: Pairing rule — two classified teachers in same committee
+    for (const day of DAYS) {
+      for (const sess of finalAssignments[day]) {
+        for (const c of sess.committees) {
+          if (c.t1.id && c.t2.id) {
+            const t1Info = teachers.find(x => x.id === c.t1.id);
+            const t2Info = teachers.find(x => x.id === c.t2.id);
+            const t1Has = t1Info && t1Info.notes && t1Info.notes.trim() !== '';
+            const t2Has = t2Info && t2Info.notes && t2Info.notes.trim() !== '';
+            if (t1Has && t2Has) {
+              violations.push(`${t1Info?.name} + ${t2Info?.name} -> both classified on ${day} (${sess.grade})`);
+            }
           }
         }
       }
@@ -1862,27 +1893,54 @@ export default function ExamSystem() {
     );
   };
 
-  // ========== ADMIN LOG PAGE (Admin Only) ==========
-  const renderAdminLogPage = () => {
-    const adminEntries = auditLog.filter(e => e.user === 'Admin');
+  // ========== LOG PAGE (Admin Only) — single tab with sub-view choice ==========
+  const renderLogPage = () => {
+    const entries = logView === 'admin'
+      ? auditLog.filter(e => e.user === 'Admin')
+      : auditLog.filter(e => e.user !== 'Admin');
+    const showUser = logView === 'users';
     return (
       <div className="card">
         <div className="card-header">
-          <div className="card-title">Admin Activity Log</div>
+          <div className="card-title">Activity Log</div>
           <button className="btn btn-ghost" onClick={loadAuditLog}>↻ Refresh</button>
         </div>
-        {adminEntries.length === 0 ? (
-          <div className="empty-state"><p>No admin activity recorded yet.</p></div>
+        <div style={{ display: 'flex', gap: 10, marginBottom: 20 }}>
+          <button
+            onClick={() => setLogView('admin')}
+            style={{
+              flex: 1, padding: '14px 20px', borderRadius: 10, border: 'none', cursor: 'pointer',
+              fontFamily: 'var(--sans)', fontSize: 14, fontWeight: 700, transition: 'all 0.2s',
+              background: logView === 'admin' ? 'var(--accent2)' : 'var(--surface2)',
+              color: logView === 'admin' ? '#fff' : 'var(--text2)'
+            }}
+          >
+            🔐 Admin Log
+          </button>
+          <button
+            onClick={() => setLogView('users')}
+            style={{
+              flex: 1, padding: '14px 20px', borderRadius: 10, border: 'none', cursor: 'pointer',
+              fontFamily: 'var(--sans)', fontSize: 14, fontWeight: 700, transition: 'all 0.2s',
+              background: logView === 'users' ? 'var(--accent)' : 'var(--surface2)',
+              color: logView === 'users' ? 'var(--bg)' : 'var(--text2)'
+            }}
+          >
+            👥 Users Log
+          </button>
+        </div>
+        {entries.length === 0 ? (
+          <div className="empty-state"><p>No {logView === 'admin' ? 'admin' : 'user'} activity recorded yet.</p></div>
         ) : (
           <div className="table-wrap" style={{ maxHeight: '70vh', overflow: 'auto' }}>
             <table>
               <thead>
                 <tr>
-                  <th>#</th><th>Time</th><th>Action</th><th>Details</th>
+                  <th>#</th><th>Time</th>{showUser && <th>User</th>}<th>Action</th><th>Details</th>
                 </tr>
               </thead>
               <tbody>
-                {adminEntries.map((entry, i) => {
+                {entries.map((entry, i) => {
                   const time = new Date(entry.timestamp);
                   const timeStr = time.toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
                   const actionColor = entry.action.includes('delete') ? 'var(--danger)' : entry.action.includes('add') ? 'var(--accent3)' : 'var(--accent)';
@@ -1890,48 +1948,7 @@ export default function ExamSystem() {
                     <tr key={entry.id || i}>
                       <td style={{ color: 'var(--text2)' }}>{i + 1}</td>
                       <td style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text2)', whiteSpace: 'nowrap' }}>{timeStr}</td>
-                      <td><span className="badge" style={{ background: `${actionColor}15`, color: actionColor, textTransform: 'capitalize' }}>{entry.action.replace(/_/g, ' ')}</span></td>
-                      <td style={{ color: 'var(--text2)', fontSize: 12 }}>{entry.details}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
-    );
-  };
-
-  // ========== USERS LOG PAGE (Admin Only) ==========
-  const renderUserLogPage = () => {
-    const userEntries = auditLog.filter(e => e.user !== 'Admin');
-    return (
-      <div className="card">
-        <div className="card-header">
-          <div className="card-title">Users Activity Log</div>
-          <button className="btn btn-ghost" onClick={loadAuditLog}>↻ Refresh</button>
-        </div>
-        {userEntries.length === 0 ? (
-          <div className="empty-state"><p>No user activity recorded yet.</p></div>
-        ) : (
-          <div className="table-wrap" style={{ maxHeight: '70vh', overflow: 'auto' }}>
-            <table>
-              <thead>
-                <tr>
-                  <th>#</th><th>Time</th><th>User</th><th>Action</th><th>Details</th>
-                </tr>
-              </thead>
-              <tbody>
-                {userEntries.map((entry, i) => {
-                  const time = new Date(entry.timestamp);
-                  const timeStr = time.toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
-                  const actionColor = entry.action.includes('delete') ? 'var(--danger)' : entry.action.includes('add') ? 'var(--accent3)' : 'var(--accent)';
-                  return (
-                    <tr key={entry.id || i}>
-                      <td style={{ color: 'var(--text2)' }}>{i + 1}</td>
-                      <td style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text2)', whiteSpace: 'nowrap' }}>{timeStr}</td>
-                      <td style={{ fontWeight: 600, color: 'var(--text)' }}>{entry.user}</td>
+                      {showUser && <td style={{ fontWeight: 600, color: 'var(--text)' }}>{entry.user}</td>}
                       <td><span className="badge" style={{ background: `${actionColor}15`, color: actionColor, textTransform: 'capitalize' }}>{entry.action.replace(/_/g, ' ')}</span></td>
                       <td style={{ color: 'var(--text2)', fontSize: 12 }}>{entry.details}</td>
                     </tr>
@@ -1954,8 +1971,7 @@ export default function ExamSystem() {
     { key: 'results', label: '📋 Results', adminOnly: false },
     { key: 'stats', label: '📊 Statistics', adminOnly: false, requiresResults: true },
     { key: 'users', label: '👥 Users', adminOnly: true },
-    { key: 'admin-log', label: '🔐 Admin Log', adminOnly: true },
-    { key: 'user-log', label: '📝 Users Log', adminOnly: true },
+    { key: 'log', label: '📝 Log', adminOnly: true },
   ];
 
   const visiblePages = pages.filter(p => {
@@ -2023,8 +2039,7 @@ export default function ExamSystem() {
             {activePage === 'results' && renderResultsPage()}
             {activePage === 'stats' && renderStatsPage()}
             {activePage === 'users' && renderUsersPage()}
-            {activePage === 'admin-log' && renderAdminLogPage()}
-            {activePage === 'user-log' && renderUserLogPage()}
+            {activePage === 'log' && renderLogPage()}
           </>
         )}
       </main>
