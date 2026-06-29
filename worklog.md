@@ -56,3 +56,19 @@ Stage Summary:
 - All 3 features implemented: audit split, max 2/day, Admin W2 toggle
 - Code compiles successfully
 - Pushed to GitHub: 7b8b914 → 999dfd9
+
+---
+Task ID: 4
+Agent: Main
+Task: English comments, old teacher rule, user permissions system
+
+Work Log:
+- Converted Arabic UI strings and comments to English (preserved Arabic data values)
+- Implemented 'old' teacher rule in distribution engine (last resort, max 3 days)
+- Added user permissions system (API + frontend with page access control)
+- Fixed startEdit to use canEdit for permission consistency
+- Bumped SW cache to v12
+
+Stage Summary:
+- 3 features implemented successfully, code compiles
+- Pushed to GitHub: 52bd6fd → ffd02c8 + fix
