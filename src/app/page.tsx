@@ -648,20 +648,31 @@ setUserPermissions([]);
       }
     }
 
-    // ---- Grading-eligible helpers ----
-    // A teacher is grading-eligible on a day if: it's Week 2 AND their subject was examined the PREVIOUS day
-    const gradingTeacherW2Count: Record<string, number> = {};
-    teachers.forEach(t => { gradingTeacherW2Count[t.id] = 0; });
+    // ---- Grading preference helpers (activated by toggle) ----
+    // Rule A: Teachers whose subject was examined yesterday → prefer first session today (partial, not all)
+    // Rule B: Admin subject teachers → 2-3 supervisions max in W2
+    // Rule C: Admin subject teachers → available for standby if pressure
 
-    const isGradingEligible = (teacher: Teacher, day: string): boolean => {
+    // Track Admin W2 supervision count (max 3)
+    const adminW2Count: Record<string, number> = {};
+    teachers.forEach(t => { adminW2Count[t.id] = 0; });
+
+    // Is teacher's subject was examined the PREVIOUS day? (for first-session preference)
+    const isSubjectExaminedYesterday = (teacher: Teacher, day: string): boolean => {
       if (!gradingPref) return false;
-      if (!WEEK2_DAYS.includes(day)) return false;
+      if (teacher.subject === 'Admin') return false; // Admin handled separately
       const idx = DAYS.indexOf(day);
       if (idx <= 0) return false;
       const prevDay = DAYS[idx - 1];
       const prevSubjs = subjectsByDay[prevDay];
       if (!prevSubjs) return false;
       return prevSubjs.has(teacher.subject);
+    };
+
+    // Is this an Admin teacher in W2 needing count tracking?
+    const isAdminInW2 = (teacher: Teacher, day: string): boolean => {
+      if (!gradingPref) return false;
+      return teacher.subject === 'Admin' && WEEK2_DAYS.includes(day);
     };
 
     // ---- Build final assignments structure ----
@@ -753,21 +764,24 @@ setUserPermissions([]);
         if (tr.assignedSlots.some(s => s.day === slot.day && !(slot.timeInfo.end <= s.start || slot.timeInfo.start >= s.end))) continue;
         // HARD: MAX 2 committees per teacher per day (NEVER relaxed)
         if (ruleDayLimit && tr.dayComm[slot.day] >= 2) continue;
-        // HARD: Grading-eligible teachers: max 3 supervisions during Week 2
-        if (isGradingEligible(t, slot.day) && (gradingTeacherW2Count[t.id] || 0) >= 3) continue;
+        // HARD: Admin teachers: max 3 supervisions during Week 2 (when grading pref ON)
+        if (isAdminInW2(t, slot.day) && (adminW2Count[t.id] || 0) >= 3) continue;
         // SOFT: No same grade on consecutive days (can be relaxed)
         if (!relaxAdj && wasSameGradeAdjacent(tr, slot)) continue;
         // Scoring: HOURS dominate (500x), then committees (10x), tiny noise for variety
         // Admin subject = HEAVY penalty (always last choice)
         const isAdmin = t.subject === 'Admin';
-        const adminPenalty = isAdmin ? 50000 : 0;
-        // Grading preference: bonus for first session, penalty for second session (soft, flexible)
+        // Admin penalty: when grading pref ON in W2, Admin is a normal candidate (not last resort)
+        // When grading pref OFF or not W2, Admin stays as heavy penalty (last resort)
+        const adminPenalty = isAdmin ? (gradingPref && WEEK2_DAYS.includes(slot.day) ? 500 : 50000) : 0;
+        // Grading preference: if teacher's subject was examined yesterday,
+        // prefer first session (soft bonus, partial — not all teachers get it)
         let gradingBonus = 0;
-        if (isGradingEligible(t, slot.day)) {
+        if (isSubjectExaminedYesterday(t, slot.day)) {
           if (isFirstSession(slot.timeInfo.start)) {
-            gradingBonus = -150; // prefer first session for grading
+            gradingBonus = -80; // soft preference for first session (partial coverage)
           } else {
-            gradingBonus = 200; // discourage second session
+            gradingBonus = 120; // soft discourage for second session
           }
         }
         const score = tr.totalHours * 500 + tr.totalComm * 10 + adminPenalty + gradingBonus + Math.random() * 0.1;
@@ -884,9 +898,9 @@ setUserPermissions([]);
           if (isOldTeacher(t1) && !tr.assignedSlots.some((s, idx) => idx < tr.assignedSlots.length - 1 && s.day === slot.day)) {
             oldTeacherDays[t1.id] = (oldTeacherDays[t1.id] || 0) + 1;
           }
-          // Track grading-eligible W2 count
-          if (isGradingEligible(t1, slot.day)) {
-            gradingTeacherW2Count[t1.id] = (gradingTeacherW2Count[t1.id] || 0) + 1;
+          // Track Admin W2 count
+          if (isAdminInW2(t1, slot.day)) {
+            adminW2Count[t1.id] = (adminW2Count[t1.id] || 0) + 1;
           }
         } else { standbyCount++; }
 
@@ -938,9 +952,9 @@ setUserPermissions([]);
           if (isOldTeacher(t2) && !tr.assignedSlots.some((s, idx) => idx < tr.assignedSlots.length - 1 && s.day === slot.day)) {
             oldTeacherDays[t2.id] = (oldTeacherDays[t2.id] || 0) + 1;
           }
-          // Track grading-eligible W2 count
-          if (isGradingEligible(t2, slot.day)) {
-            gradingTeacherW2Count[t2.id] = (gradingTeacherW2Count[t2.id] || 0) + 1;
+          // Track Admin W2 count
+          if (isAdminInW2(t2, slot.day)) {
+            adminW2Count[t2.id] = (adminW2Count[t2.id] || 0) + 1;
           }
         } else { standbyCount++; }
 
@@ -1204,11 +1218,10 @@ setUserPermissions([]);
           const bWasYesterday = yesterdayStandby.has(b.id) ? 100 : 0;
           const aFree = isCompletelyFreeToday(a) ? 0 : 10;
           const bFree = isCompletelyFreeToday(b) ? 0 : 10;
-          // Grading-eligible teachers: slightly prefer them for standby (they may be needed for pressure)
-          // But don't override rotation fairness - just a small bonus
-          const aGrading = (gradingPref && isGradingEligible(a, day) && (gradingTeacherW2Count[a.id] || 0) < 3) ? -5 : 0;
-          const bGrading = (gradingPref && isGradingEligible(b, day) && (gradingTeacherW2Count[b.id] || 0) < 3) ? -5 : 0;
-          return (teacherStandbyCount[a.id] + aWasYesterday + aFree + aGrading) - (teacherStandbyCount[b.id] + bWasYesterday + bFree + bGrading);
+          // Admin teachers: slightly prefer them for standby under pressure (W2)
+          const aAdmin = (gradingPref && a.subject === 'Admin' && WEEK2_DAYS.includes(day) && (adminW2Count[a.id] || 0) < 3) ? -8 : 0;
+          const bAdmin = (gradingPref && b.subject === 'Admin' && WEEK2_DAYS.includes(day) && (adminW2Count[b.id] || 0) < 3) ? -8 : 0;
+          return (teacherStandbyCount[a.id] + aWasYesterday + aFree + aAdmin) - (teacherStandbyCount[b.id] + bWasYesterday + bFree + bAdmin);
         });
 
         // Pick min(2, candidates.length) teachers
@@ -1342,12 +1355,13 @@ setUserPermissions([]);
       }
     }
 
-    // V-Check 9: Grading-eligible teachers W2 max 3
+    // V-Check 9: Admin teachers W2 max 3 (when grading pref ON)
     if (gradingPref) {
       for (const t of teachers) {
-        const w2Count = gradingTeacherW2Count[t.id] || 0;
+        if (t.subject !== 'Admin') continue;
+        const w2Count = adminW2Count[t.id] || 0;
         if (w2Count > 3) {
-          violations.push(`${t.name} -> grading-eligible teacher assigned ${w2Count} times in W2 (max 3)`);
+          violations.push(`${t.name} -> Admin teacher assigned ${w2Count} times in W2 (max 3)`);
         }
       }
     }
@@ -1824,8 +1838,8 @@ setUserPermissions([]);
             </label>
             <label style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, cursor: 'pointer', padding: '8px 12px', background: 'rgba(99,179,237,0.06)', borderRadius: 8, border: '1px solid rgba(99,179,237,0.15)' }}>
               <input type="checkbox" id="rule-grading-pref" defaultChecked={false} style={{ width: 16, height: 16, accentColor: 'var(--accent3)' }} />
-              <span style={{ color: 'var(--accent3)', fontWeight: 600 }}>Grading preference (W2)</span>
-              <span style={{ fontSize: 11, color: 'var(--text2)' }}>(subject teachers → first session next day, max 3)</span>
+              <span style={{ color: 'var(--accent3)', fontWeight: 600 }}>W2 Grading Mode</span>
+              <span style={{ fontSize: 11, color: 'var(--text2)' }}>(Admin 2-3x, subject→1st session, Admin standby)</span>
             </label>
             <div style={{ fontSize: 11, color: 'var(--text2)', lineHeight: 1.6, padding: '4px 0' }}>
               • Chronological day-by-day processing<br/>
@@ -1834,7 +1848,8 @@ setUserPermissions([]);
               • Hours balanced from actual assignments<br/>
               • No same grade on consecutive days<br/>
               • No time overlap for same teacher<br/>
-              • Old teachers (notes: "old") → secondary only, paired with sec-note teacher
+              • Old teachers (notes: "old") → secondary only, paired with sec-note teacher<br/>
+              • <span style={{ color: 'var(--accent3)' }}>W2 Grading:</span> Admin 2-3 duties, subject teachers → 1st session, Admin → standby
             </div>
           </div>
         </div>
