@@ -1247,7 +1247,7 @@ export default function ExamSystem() {
     const pageW = 210, pageH = 297;
     let firstPage = true;
     const container = document.createElement('div');
-    container.style.cssText = 'position:fixed;top:-9999px;left:0;width:794px;z-index:-1;direction:rtl;font-family:"Segoe UI",Tahoma,Arial,sans-serif;color:#000;background:#fff;';
+    container.style.cssText = 'position:fixed;top:-9999px;left:0;width:794px;z-index:-1;font-family:Arial,Helvetica,sans-serif;color:#000;background:#fff;';
 
     const pages: HTMLDivElement[] = [];
 
@@ -1265,7 +1265,7 @@ export default function ExamSystem() {
         if (session.committees.length === 0) continue;
 
         const pageDiv = document.createElement('div');
-        pageDiv.style.cssText = 'width:794px;padding:40px 50px;box-sizing:border-box;background:#fff;page-break-after:always;';
+        pageDiv.style.cssText = 'width:794px;padding:40px 50px;box-sizing:border-box;background:#fff;page-break-after:always;direction:rtl;';
 
         // Header / Decoration
         const headerHtml = `
@@ -1274,7 +1274,7 @@ export default function ExamSystem() {
               جدول إشراف الامتحانات
             </div>
           </div>
-          <div style="display:flex;flex-wrap:wrap;justify-content:space-between;font-size:13px;margin-bottom:14px;padding:8px 14px;background:#f0f4f8;border-radius:8px;border:1px solid #d0d8e0;direction:rtl;">
+          <div style="display:flex;flex-wrap:wrap;justify-content:space-between;font-size:13px;margin-bottom:14px;padding:8px 14px;background:#f0f4f8;border-radius:8px;border:1px solid #d0d8e0;">
             <div style="font-weight:bold;"><span style="color:#555;">اليوم:</span> ${dayAr} (${weekAr})</div>
             <div style="font-weight:bold;"><span style="color:#555;">الصف:</span> ${GRADE_AR[session.grade] || session.grade}</div>
             <div style="font-weight:bold;"><span style="color:#555;">المادة:</span> ${session.subject || '—'}</div>
@@ -1283,15 +1283,16 @@ export default function ExamSystem() {
         `;
 
         // Table: each committee = 2 rows (names stacked vertically)
+        const nameStyle = "border:1px solid #333;padding:8px 10px;text-align:center;width:420px;font-size:14px;font-weight:bold;color:#000;font-family:Arial,Helvetica,sans-serif;";
         const rowsHtml = session.committees.map(c => `
           <tr>
-            <td rowspan="2" style="border:1px solid #333;padding:8px;text-align:center;width:50px;font-weight:bold;font-size:13px;vertical-align:middle;">${c.serial}</td>
-            <td style="border:1px solid #333;padding:7px 10px;text-align:center;width:420px;font-size:13px;font-family:'Segoe UI',Tahoma,'Noto Sans Arabic',sans-serif;letter-spacing:0.3px;">${c.t1.name}</td>
-            <td style="border:1px solid #333;padding:7px 8px;text-align:center;width:110px;"></td>
+            <td rowspan="2" style="border:1px solid #333;padding:8px;text-align:center;width:50px;font-weight:bold;font-size:13px;vertical-align:middle;color:#000;">${c.serial}</td>
+            <td style="${nameStyle}">${c.t1.name}</td>
+            <td style="border:1px solid #333;padding:8px;text-align:center;width:110px;"></td>
           </tr>
           <tr>
-            <td style="border:1px solid #333;padding:7px 10px;text-align:center;width:420px;font-size:13px;font-family:'Segoe UI',Tahoma,'Noto Sans Arabic',sans-serif;letter-spacing:0.3px;">${c.t2.name}</td>
-            <td style="border:1px solid #333;padding:7px 8px;text-align:center;width:110px;"></td>
+            <td style="${nameStyle}">${c.t2.name}</td>
+            <td style="border:1px solid #333;padding:8px;text-align:center;width:110px;"></td>
           </tr>
         `).join('');
 
