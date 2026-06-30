@@ -1,0 +1,869 @@
+  1380→
+  1381→    try {
+  1382→      for (let i = 0; i < pages.length; i++) {
+  1383→        const canvas = await html2canvas(pages[i], {
+  1384→          scale: 2,
+  1385→          useCORS: true,
+  1386→          backgroundColor: '#ffffff',
+  1387→          width: 794,
+  1388→          windowWidth: 794,
+  1389→        });
+  1390→        const imgData = canvas.toDataURL('image/png');
+  1391→        if (!firstPage) doc.addPage();
+  1392→        firstPage = false;
+  1393→        const imgW = pageW;
+  1394→        const imgH = (canvas.height * imgW) / canvas.width;
+  1395→        doc.addImage(imgData, 'PNG', 0, 0, imgW, Math.min(imgH, pageH));
+  1396→      }
+  1397→      doc.save('exam_supervision_schedule.pdf');
+  1398→      showToast('PDF downloaded successfully!', 'success');
+  1399→    } catch (err) {
+  1400→      console.error('PDF export error:', err);
+  1401→      showToast('Error exporting PDF', 'error');
+  1402→    } finally {
+  1403→      document.body.removeChild(container);
+  1404→    }
+  1405→  };
+  1406→
+  1407→  // ========== RESET ALL ==========
+  1408→  const resetAll = async () => {
+  1409→    if (!confirm('Perform dynamic hard reset?')) return;
+  1410→    await fetch('/api/distribute', { method: 'DELETE' });
+  1411→    loadAll();
+  1412→    setResults(null);
+  1413→    showToast('All data has been reset', 'info');
+  1414→  };
+  1415→
+  1416→  // ========== RENDER HELPERS ==========
+  1417→  const getCell = (grade: string, day: string): ScheduleCell => {
+  1418→    return scheduleBuffer[`${grade}__${day}`] || { grade, day, committees: 0, subject: '', time: DEFAULT_TIMES[grade] || '9:00-10:30' };
+  1419→  };
+  1420→
+  1421→  const totalCommittees = Object.values(scheduleBuffer).reduce((a, c) => a + (c.committees || 0), 0);
+  1422→  const totalSlots = totalCommittees * 2;
+  1423→
+  1424→  // ========== LOGIN SCREEN ==========
+  1425→  if (view === 'login') {
+  1426→    return (
+  1427→      <div className="app" style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative', zIndex: 1 }}>
+  1428→        <style jsx>{`
+  1429→          @keyframes pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.4;transform:scale(1.4)} }
+  1430→        `}</style>
+  1431→        <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 16, padding: 48, maxWidth: 400, width: '90%', textAlign: 'center' }}>
+  1432→          <div style={{ width: 12, height: 12, background: 'var(--accent)', borderRadius: '50%', margin: '0 auto 16px', animation: 'pulse 2s infinite' }} />
+  1433→          <h1 style={{ fontFamily: 'var(--mono)', fontSize: 16, color: 'var(--accent)', letterSpacing: 2, marginBottom: 8 }}>EXAM · SUPERVISOR</h1>
+  1434→          <p style={{ color: 'var(--text2)', fontSize: 13, marginBottom: 32 }}>Exam Committee Distribution System</p>
+  1435→
+  1436→          {!loginMode ? (
+  1437→            /* Step 1: Choose role */
+  1438→            <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+  1439→              <button
+  1440→                onClick={() => { setLoginMode('user'); setLoginError(''); setPassword(''); }}
+  1441→                style={{ padding: '18px 24px', borderRadius: 12, background: 'var(--surface2)', border: '1px solid var(--border)', color: 'var(--text)', fontSize: 16, fontWeight: 600, cursor: 'pointer', fontFamily: 'var(--sans)', transition: 'all 0.2s', width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10 }}
+  1442→                onMouseOver={e => { (e.target as HTMLElement).style.borderColor = 'var(--accent)'; (e.target as HTMLElement).style.background = 'rgba(0,212,255,0.05)'; }}
+  1443→                onMouseOut={e => { (e.target as HTMLElement).style.borderColor = 'var(--border)'; (e.target as HTMLElement).style.background = 'var(--surface2)'; }}
+  1444→              >
+  1445→                <span style={{ fontSize: 22 }}>👤</span> Enter as User
+  1446→              </button>
+  1447→              <button
+  1448→                onClick={() => { setLoginMode('admin'); setLoginError(''); setPassword(''); }}
+  1449→                style={{ padding: '18px 24px', borderRadius: 12, background: 'var(--accent2)', border: 'none', color: '#fff', fontSize: 16, fontWeight: 600, cursor: 'pointer', fontFamily: 'var(--sans)', transition: 'all 0.2s', width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10 }}
+  1450→                onMouseOver={e => { (e.target as HTMLElement).style.background = '#e55a2b'; }}
+  1451→                onMouseOut={e => { (e.target as HTMLElement).style.background = 'var(--accent2)'; }}
+  1452→              >
+  1453→                <span style={{ fontSize: 22 }}>🔐</span> Enter as Admin
+  1454→              </button>
+  1455→            </div>
+  1456→          ) : (
+  1457→            /* Step 2: Enter credentials for chosen role */
+  1458→            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+  1459→              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, marginBottom: 4, color: 'var(--text2)', fontSize: 13 }}>
+  1460→                <button onClick={() => { setLoginMode(null); setLoginError(''); setPassword(''); setSelectedSupervisor(''); }} style={{ background: 'none', border: 'none', color: 'var(--text2)', cursor: 'pointer', fontSize: 16, padding: '0 4px', lineHeight: 1 }}>←</button>
+  1461→                <span>{loginMode === 'user' ? '👤 User Login' : '🔐 Admin Login'}</span>
+  1462→              </div>
+  1463→              {loginMode === 'user' && (
+  1464→                <select
+  1465→                  value={selectedSupervisor}
+  1466→                  onChange={e => { setSelectedSupervisor(e.target.value); setLoginError(''); }}
+  1467→                  style={{ padding: '14px 16px', borderRadius: 10, background: 'var(--bg)', border: '1px solid var(--border)', color: selectedSupervisor ? 'var(--text)' : 'var(--text2)', fontSize: 15, fontFamily: 'var(--sans)', outline: 'none', width: '100%', cursor: 'pointer', appearance: 'auto' }}
+  1468→                >
+  1469→                  <option value="">-- Select your name --</option>
+  1470→                  {supervisors.map(s => <option key={s.id} value={s.name}>{s.name}</option>)}
+  1471→                </select>
+  1472→              )}
+  1473→              <input
+  1474→                type="password"
+  1475→                placeholder={loginMode === 'user' ? 'Enter Password' : 'Enter Admin Password'}
+  1476→                value={password}
+  1477→                onChange={e => { setPassword(e.target.value); setLoginError(''); }}
+  1478→                onKeyDown={e => e.key === 'Enter' && handleLogin(loginMode)}
+  1479→                autoFocus={loginMode === 'admin'}
+  1480→                style={{ padding: '14px 16px', borderRadius: 10, background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text)', fontSize: 15, fontFamily: 'var(--sans)', outline: 'none', textAlign: 'center', width: '100%' }}
+  1481→              />
+  1482→              <button
+  1483→                onClick={() => handleLogin(loginMode)}
+  1484→                style={{
+  1485→                  padding: '14px 24px', borderRadius: 10,
+  1486→                  background: loginMode === 'admin' ? 'var(--accent2)' : 'var(--accent)',
+  1487→                  border: loginMode === 'admin' ? 'none' : '1px solid var(--accent)',
+  1488→                  color: loginMode === 'admin' ? '#fff' : 'var(--bg)',
+  1489→                  fontSize: 15, fontWeight: 700, cursor: 'pointer', fontFamily: 'var(--sans)',
+  1490→                  transition: 'all 0.2s', width: '100%'
+  1491→                }}
+  1492→                onMouseOver={e => {
+  1493→                  if (loginMode === 'admin') (e.target as HTMLElement).style.background = '#e55a2b';
+  1494→                  else (e.target as HTMLElement).style.opacity = '0.85';
+  1495→                }}
+  1496→                onMouseOut={e => {
+  1497→                  if (loginMode === 'admin') (e.target as HTMLElement).style.background = 'var(--accent2)';
+  1498→                  else (e.target as HTMLElement).style.opacity = '1';
+  1499→                }}
+  1500→              >
+  1501→                Login
+  1502→              </button>
+  1503→              {loginError && <p style={{ color: 'var(--danger)', fontSize: 12, margin: '-4px 0 0' }}>{loginError}</p>}
+  1504→            </div>
+  1505→          )}
+  1506→
+  1507→          <div style={{ marginTop: 24, fontSize: 11, color: 'var(--text2)' }}>
+  1508→            <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: isConnected ? 'var(--success)' : 'var(--danger)', marginRight: 6 }} />
+  1509→            {isConnected ? 'Connected' : 'Offline'}
+  1510→          </div>
+  1511→        </div>
+  1512→      </div>
+  1513→    );
+  1514→  }
+  1515→
+  1516→  const isAdmin = view === 'admin';
+  1517→  const canEdit = isAdmin || userPermissions.includes('teachers') || userPermissions.includes('schedule') || userPermissions.includes('schedule_edit');
+  1518→  const roleLabel = isAdmin ? 'ADMIN' : currentUser || 'USER';
+  1519→  const roleColor = isAdmin ? 'var(--accent2)' : 'var(--accent3)';
+  1520→
+  1521→  // ========== PERMISSIONS: Page access control ==========
+  1522→  const canAccessPage = (page: Page): boolean => {
+  1523→    if (page === 'distribute' || page === 'log') return isAdmin; // Always admin-only
+  1524→    if (isAdmin) return true; // Admin sees all
+  1525→    // schedule_edit grants same page visibility as schedule
+  1526→    if (page === 'schedule' && userPermissions.includes('schedule_edit')) return true;
+  1527→    // Regular user: default access to teachers (view), results, stats
+  1528→    if (!userPermissions || userPermissions.length === 0) {
+  1529→      return page === 'teachers' || page === 'results' || page === 'stats';
+  1530→    }
+  1531→    // User with specific permissions: only those pages
+  1532→    return userPermissions.includes(page);
+  1533→  };
+  1534→
+  1535→  // ========== TEACHERS PAGE ==========
+  1536→  const renderTeachersPage = () => (
+  1537→    <div className="card">
+  1538→      <div className="card-header">
+  1539→        <div className="card-title">Teacher Registry</div>
+  1540→        {(isAdmin || canEdit) && (
+  1541→        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+  1542→          {isAdmin && <button className="btn btn-demo" onClick={generateDemoTeachers}>🧪 Generate 200 Mock Teachers</button>}
+  1543→          {isAdmin && <button className="btn btn-ghost" onClick={importCSV}>📂 Import CSV</button>}
+  1544→          <button className="btn btn-primary" onClick={() => { cancelEdit(); setShowAddTeacher(!showAddTeacher); }}>
+  1545→            + Add New Teacher
+  1546→          </button>
+  1547→        </div>
+  1548→        )}
+  1549→      </div>
+  1550→
+  1551→      {showAddTeacher && (
+  1552→        <div style={{ background: 'var(--surface2)', borderRadius: 10, padding: 20, marginBottom: 20 }}>
+  1553→          <div className="grid-3">
+  1554→            <div className="form-group">
+  1555→              <label className="form-label">Full Name</label>
+  1556→              <input className="form-input" value={formName} onChange={e => setFormName(e.target.value)} placeholder="e.g. John Doe" />
+  1557→            </div>
+  1558→            <div className="form-group">
+  1559→              <label className="form-label">Specialist Subject</label>
+  1560→              <select className="form-select" value={formSubject} onChange={e => setFormSubject(e.target.value)}>
+  1561→                <option value="">-- Choose Subject --</option>
+  1562→                {SUBJECTS.map(s => <option key={s} value={s}>{s}</option>)}
+  1563→              </select>
+  1564→            </div>
+  1565→            <div className="form-group">
+  1566→              <label className="form-label">Stage Assignment Notes</label>
+  1567→              <input className="form-input" value={formNotes} onChange={e => setFormNotes(e.target.value)} placeholder="e.g. prep, sec, primary" />
+  1568→            </div>
+  1569→          </div>
+  1570→          <div style={{ display: 'flex', gap: 10 }}>
+  1571→            <button className="btn btn-primary" onClick={saveTeacher}>✓ Save Teacher</button>
+  1572→            <button className="btn btn-ghost" onClick={cancelAddForm}>Cancel</button>
+  1573→          </div>
+  1574→        </div>
+  1575→      )}
+  1576→
+  1577→      <div id="teachers-stats" style={{ display: 'flex', gap: 12, marginBottom: 16, flexWrap: 'wrap' }}>
+  1578→        <span className="badge badge-green">Total Registered: {teachers.length}</span>
+  1579→        {Object.entries(teachers.reduce((acc: Record<string,number>, t) => { acc[t.subject] = (acc[t.subject]||0)+1; return acc; }, {})).map(([s,c]) => (
+  1580→          <span key={s} className="badge badge-blue">{s}: {c}</span>
+  1581→        ))}
+  1582→      </div>
+  1583→
+  1584→      <div className="table-wrap">
+  1585→        <table>
+  1586→          <thead>
+  1587→            <tr>
+  1588→              <th>Index</th><th>Teacher Name</th><th>Subject Badge</th><th>Stage Rules</th>
+  1589→              <th>Actions</th>
+  1590→            </tr>
+  1591→          </thead>
+  1592→          <tbody>
+  1593→            {teachers.length === 0 ? (
+  1594→              <tr><td colSpan={5} style={{ textAlign: 'center', padding: 32 }}>No teachers loaded in registry.</td></tr>
+  1595→            ) : teachers.map((t, i) => {
+  1596→              if (editTeacherId === t.id) return (
+  1597→                <tr key={t.id} style={{ background: 'rgba(0,212,255,0.06)' }}>
+  1598→                  <td style={{ fontWeight: 700, color: 'var(--accent)' }}>{i + 1}</td>
+  1599→                  <td><input className="form-input" value={formName} onChange={e => setFormName(e.target.value)} style={{ margin: 0, padding: '6px 10px', fontSize: 13 }} autoFocus /></td>
+  1600→                  <td>
+  1601→                    <select className="form-select" value={formSubject} onChange={e => setFormSubject(e.target.value)} style={{ margin: 0, padding: '6px 8px', fontSize: 13 }}>
+  1602→                      <option value="">-- Subject --</option>
+  1603→                      {SUBJECTS.map(s => <option key={s} value={s}>{s}</option>)}
+  1604→                    </select>
+  1605→                  </td>
+  1606→                  <td><input className="form-input" value={formNotes} onChange={e => setFormNotes(e.target.value)} placeholder="Stage notes" style={{ margin: 0, padding: '6px 10px', fontSize: 13 }} /></td>
+  1607→                  <td style={{ display: 'flex', gap: 6 }}>
+  1608→                    <button className="action-btn edit-btn" onClick={() => inlineSave(t.id)} style={{ background: 'var(--success)', color: '#fff' }}>Save</button>
+  1609→                    <button className="action-btn del-btn" onClick={() => setEditTeacherId(null)}>Cancel</button>
+  1610→                  </td>
+  1611→                </tr>
+  1612→              );
+  1613→              return (
+  1614→                <tr key={t.id}>
+  1615→                  <td>{i + 1}</td>
+  1616→                  <td style={{ fontWeight: 600, color: 'var(--text)' }}>{t.name}</td>
+  1617→                  <td><span className="badge badge-blue">{t.subject}</span></td>
+  1618→                  <td style={{ color: 'var(--accent3)' }}>{t.notes || 'Any Stage'}</td>
+  1619→                  <td>
+  1620→                    <button className="action-btn edit-btn" onClick={() => startEdit(t)}>Edit</button>
+  1621→                    {isAdmin && <button className="action-btn del-btn" onClick={() => deleteTeacher(t.id)}>Remove</button>}
+  1622→                  </td>
+  1623→                </tr>
+  1624→              );
+  1625→            })}
+  1626→          </tbody>
+  1627→        </table>
+  1628→      </div>
+  1629→    </div>
+  1630→  );
+  1631→
+  1632→  // ========== SCHEDULE PAGE ==========
+  1633→  const renderSchedulePage = () => (
+  1634→    <div className="card">
+  1635→      <div className="card-header">
+  1636→        <div className="card-title">Exam Structure Blueprint</div>
+  1637→        {isAdmin && (
+  1638→        <div style={{ display: 'flex', gap: 10 }}>
+  1639→          <button className="btn btn-primary" onClick={saveSchedule}>💾 Save Blueprint</button>
+  1640→          <button className="btn btn-ghost" onClick={resetSchedule}>↺ Reset Matrix</button>
+  1641→        </div>
+  1642→        )}
+  1643→      </div>
+  1644→      <div className="table-wrap" style={{ maxHeight: '70vh', overflow: 'auto' }}>
+  1645→        <div className="schedule-grid">
+  1646→          {/* Row 1: Corner + Week Labels */}
+  1647→          <div className="sg-corner">Grade</div>
+  1648→          <div className="sg-week-label" style={{ gridColumn: 'span 6', color: 'var(--accent)', background: 'rgba(0,212,255,0.08)' }}>── Week 1 ──</div>
+  1649→          <div className="sg-week-label sg-w2-sep" style={{ gridColumn: 'span 6', color: 'var(--accent2)', background: 'rgba(255,107,53,0.08)' }}>── Week 2 ──</div>
+  1650→          {/* Row 2: Corner + Day Names */}
+  1651→          <div className="sg-header">Grade</div>
+  1652→          {WEEK1_DAYS.map(d => <div key={d} className="sg-header">{d.replace('W1-','').slice(0,3)}</div>)}
+  1653→          {WEEK2_DAYS.map(d => <div key={d} className="sg-header sg-w2-sep">{d.replace('W2-','').slice(0,3)}</div>)}
+  1654→          {/* Data Rows */}
+  1655→          {GRADES.map(grade => (
+  1656→            <React.Fragment key={grade}>
+  1657→              <div className="sg-grade">{grade}</div>
+  1658→              {WEEK1_DAYS.map(day => {
+  1659→                const cell = getCell(grade, day);
+  1660→                return (
+  1661→                  <div key={day} className="sg-cell">
+  1662→                    <input type="number" min="0" placeholder="Comms" value={cell.committees || ''} onChange={e => updateCell(grade, day, 'committees', parseInt(e.target.value) || 0)} readOnly={!(isAdmin || userPermissions.includes('schedule_edit'))} style={!(isAdmin || userPermissions.includes('schedule_edit')) ? { opacity: 0.7, cursor: 'not-allowed' } : {}} />
+  1663→                    <select value={cell.subject || ''} onChange={e => updateCell(grade, day, 'subject', e.target.value)} disabled={!(isAdmin || userPermissions.includes('schedule_edit'))} style={!(isAdmin || userPermissions.includes('schedule_edit')) ? { opacity: 0.7, cursor: 'not-allowed' } : {}}>
+  1664→                      <option value="">Subject</option>
+  1665→                      {SUBJECTS.map(s => <option key={s} value={s}>{s}</option>)}
+  1666→                    </select>
+  1667→                    <input type="text" placeholder="Time" value={cell.time || ''} onChange={e => updateCell(grade, day, 'time', e.target.value)} readOnly={!(isAdmin || userPermissions.includes('schedule_edit'))} style={!(isAdmin || userPermissions.includes('schedule_edit')) ? { opacity: 0.7, cursor: 'not-allowed' } : {}} />
+  1668→                  </div>
+  1669→                );
+  1670→              })}
+  1671→              {WEEK2_DAYS.map(day => {
+  1672→                const cell = getCell(grade, day);
+  1673→                return (
+  1674→                  <div key={day} className="sg-cell sg-w2-cell">
+  1675→                    <input type="number" min="0" placeholder="Comms" value={cell.committees || ''} onChange={e => updateCell(grade, day, 'committees', parseInt(e.target.value) || 0)} readOnly={!(isAdmin || userPermissions.includes('schedule_edit'))} style={!(isAdmin || userPermissions.includes('schedule_edit')) ? { opacity: 0.7, cursor: 'not-allowed' } : {}} />
+  1676→                    <select value={cell.subject || ''} onChange={e => updateCell(grade, day, 'subject', e.target.value)} disabled={!(isAdmin || userPermissions.includes('schedule_edit'))} style={!(isAdmin || userPermissions.includes('schedule_edit')) ? { opacity: 0.7, cursor: 'not-allowed' } : {}}>
+  1677→                      <option value="">Subject</option>
+  1678→                      {SUBJECTS.map(s => <option key={s} value={s}>{s}</option>)}
+  1679→                    </select>
+  1680→                    <input type="text" placeholder="Time" value={cell.time || ''} onChange={e => updateCell(grade, day, 'time', e.target.value)} readOnly={!(isAdmin || userPermissions.includes('schedule_edit'))} style={!(isAdmin || userPermissions.includes('schedule_edit')) ? { opacity: 0.7, cursor: 'not-allowed' } : {}} />
+  1681→                  </div>
+  1682→                );
+  1683→              })}
+  1684→            </React.Fragment>
+  1685→          ))}
+  1686→        </div>
+  1687→      </div>
+  1688→    </div>
+  1689→  );
+  1690→
+  1691→  // ========== DISTRIBUTE PAGE (Admin Only) ==========
+  1692→  const renderDistributePage = () => (
+  1693→    <>
+  1694→      <div className="grid-4" style={{ marginBottom: 24 }}>
+  1695→        <div className="stat-card"><span className="stat-number">{teachers.length}</span><div className="stat-label">Available Pools</div></div>
+  1696→        <div className="stat-card"><span className="stat-number">{totalCommittees}</span><div className="stat-label">Active Rooms Matrix</div></div>
+  1697→        <div className="stat-card"><span className="stat-number">{totalSlots}</span><div className="stat-label">Total Task Slots</div></div>
+  1698→      </div>
+  1699→      <div className="card">
+  1700→        <div className="card-title" style={{ marginBottom: 16 }}>Distribution Engine Rules</div>
+  1701→        <div className="grid-2">
+  1702→          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+  1703→            <label style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, cursor: 'pointer' }}>
+  1704→              <input type="checkbox" id="rule-subject" defaultChecked style={{ width: 16, height: 16, accentColor: 'var(--accent)' }} />
+  1705→              No teacher supervises their own subject
+  1706→            </label>
+  1707→            <label style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, cursor: 'pointer' }}>
+  1708→              <input type="checkbox" id="rule-daylimit" defaultChecked style={{ width: 16, height: 16, accentColor: 'var(--accent)' }} />
+  1709→              Max 1 duty per day (relaxed only if shortage)
+  1710→            </label>
+  1711→          </div>
+  1712→          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+  1713→            <label style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, cursor: 'pointer' }}>
+  1714→              <input type="checkbox" id="rule-notes" defaultChecked style={{ width: 16, height: 16, accentColor: 'var(--accent)' }} />
+  1715→              Respect Stage Notes (primary/prep/sec)
+  1716→            </label>
+  1717→            <label style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, cursor: 'pointer', padding: '8px 12px', background: 'rgba(255,107,53,0.06)', borderRadius: 8, border: '1px solid rgba(255,107,53,0.15)' }}>
+  1718→              <input type="checkbox" id="rule-admin-w2" defaultChecked={false} style={{ width: 16, height: 16, accentColor: 'var(--accent2)' }} />
+  1719→              <span style={{ color: 'var(--accent2)', fontWeight: 600 }}>Admin in Week 2 only</span>
+  1720→              <span style={{ fontSize: 11, color: 'var(--text2)' }}>(peak days, last resort)</span>
+  1721→            </label>
+  1722→            <div style={{ fontSize: 11, color: 'var(--text2)', lineHeight: 1.6, padding: '4px 0' }}>
+  1723→              • Chronological day-by-day processing<br/>
+  1724→              • MAX 2 committees per teacher per day (hard rule)<br/>
+  1725→              • Admin = LAST resort, fewer hours than others<br/>
+  1726→              • Hours balanced from actual assignments<br/>
+  1727→              • No same grade on consecutive days<br/>
+  1728→              • No time overlap for same teacher
+  1729→            </div>
+  1730→          </div>
+  1731→        </div>
+  1732→      </div>
+  1733→      <div className="distribute-btn-wrap">
+  1734→        <button className="btn btn-orange" onClick={runDistribution}>
+  1735→          ⚡ RUN ULTRA ANTI-OVERLAP BALANCER
+  1736→        </button>
+  1737→      </div>
+  1738→    </>
+  1739→  );
+  1740→
+  1741→  // ========== RESULTS PAGE ==========
+  1742→  const renderResultsPage = () => {
+  1743→    if (!results?.assignments) return <div className="card"><div className="empty-state"><p>Execute the distribution engine to view results</p></div></div>;
+  1744→
+  1745→    const STAGE_LABELS: Record<string, string> = { primary: 'Primary', prep: 'Prep', sec: 'Secondary' };
+  1746→    const STAGE_COLORS: Record<string, string> = { primary: '#f59e0b', prep: '#8b5cf6', sec: '#06b6d4' };
+  1747→
+  1748→    return (
+  1749→      <div>
+  1750→        <div style={{ marginBottom: 16, display: 'flex', gap: 10 }}>
+  1751→          <button className="btn btn-primary" onClick={exportPDF}>📄 Download PDF (A4 Printable)</button>
+  1752→        </div>
+  1753→        {DAYS.map((day, idx) => {
+  1754→          const sessions = results.assignments[day] || [];
+  1755→          const dayStandbys = results.standbys?.[day];
+  1756→          const hasStandby = dayStandbys && Object.values(dayStandbys).some(s => s.length > 0);
+  1757→          if (sessions.length === 0 && !hasStandby) return null;
+  1758→          const displayDay = day.replace('W1-','Week 1 - ').replace('W2-','Week 2 - ');
+  1759→          // Week separator before first W2 day
+  1760→          const weekSep = idx === WEEK1_DAYS.length ? (
+  1761→            <div key="w2-sep" style={{ display: 'flex', alignItems: 'center', gap: 12, margin: '20px 0 8px', color: 'var(--accent2)', fontWeight: 700, fontSize: 14 }}>
+  1762→              <span style={{ flex: 1, height: 1, background: 'linear-gradient(90deg, var(--accent2), transparent)' }} />
+  1763→              ── Week 2 ──
+  1764→              <span style={{ flex: 1, height: 1, background: 'linear-gradient(270deg, var(--accent2), transparent)' }} />
+  1765→            </div>
+  1766→          ) : null;
+  1767→          return (
+  1768→            <React.Fragment key={day}>
+  1769→              {weekSep}
+  1770→            <div className="result-day">
+  1771→              <div className="result-day-header" onClick={() => {
+  1772→                const body = document.getElementById('day-body-' + day);
+  1773→                if (body) body.style.display = body.style.display === 'none' ? 'block' : 'none';
+  1774→              }}>
+  1775→                <div className="result-day-title">📅 {displayDay} </div>
+  1776→                <span>View Options ▼</span>
+  1777→              </div>
+  1778→              <div className="result-day-body" id={'day-body-' + day} style={{ display: 'block' }}>
+  1779→                {sessions.map((session, si) => (
+  1780→                  <div key={si} className="result-session">
+  1781→                    <div className="result-session-header">
+  1782→                      <span className="rs-grade">{session.grade}</span>
+  1783→                      <span className="rs-time">⏰ Window: {session.time}</span>
+  1784→                      <span className="rs-subject">📖 Subject: {session.subject || 'Unassigned'}</span>
+  1785→                    </div>
+  1786→                    <div className="result-com" style={{ background: 'var(--surface2)', fontSize: 12, fontWeight: 600 }}>
+  1787→                      <div className="rc-cell rc-num">Room</div>
+  1788→                      <div className="rc-cell">Lead Supervisor</div>
+  1789→                      <div className="rc-cell">Associate Supervisor</div>
+  1790→                      <div className="rc-cell" style={{ justifyContent: 'center' }}>Daily Load Check</div>
+  1791→                    </div>
+  1792→                    {session.committees.map((c, ci) => {
+  1793→                      const dc1 = c.t1.id ? results.tracking[c.t1.id]?.dayComm[day] : 0;
+  1794→                      const dc2 = c.t2.id ? results.tracking[c.t2.id]?.dayComm[day] : 0;
+  1795→                      return (
+  1796→                        <div key={ci} className="result-com">
+  1797→                          <div className="rc-cell rc-num">Room {c.serial}</div>
+  1798→                          <div className="rc-cell">{c.t1.name}</div>
+  1799→                          <div className="rc-cell">{c.t2.name}</div>
+  1800→                          <div className="rc-cell" style={{ justifyContent: 'center', fontFamily: 'var(--mono)', color: 'var(--text2)', fontSize: 11 }}>
+  1801→                            {c.t1.id ? dc1 + ' Duty' : '-'} / {c.t2.id ? dc2 + ' Duty' : '-'}
+  1802→                          </div>
+  1803→                        </div>
+  1804→                      );
+  1805→                    })}
+  1806→                  </div>
+  1807→                ))}
+  1808→                {/* Standby section */}
+  1809→                {hasStandby && (
+  1810→                  <div style={{ marginTop: 12, background: 'rgba(245,158,11,0.06)', border: '1px solid rgba(245,158,11,0.2)', borderRadius: 10, padding: '12px 16px' }}>
+  1811→                    <div style={{ fontSize: 13, fontWeight: 700, color: '#f59e0b', marginBottom: 8 }}>📍 Available Teachers (Standby)</div>
+  1812→                    {['primary', 'prep', 'sec'].map(stage => {
+  1813→                      const stList = dayStandbys?.[stage] || [];
+  1814→                      if (stList.length === 0) return null;
+  1815→                      return (
+  1816→                        <div key={stage} style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
+  1817→                          <span style={{ fontSize: 12, fontWeight: 700, color: STAGE_COLORS[stage], background: `${STAGE_COLORS[stage]}18`, padding: '2px 10px', borderRadius: 6 }}>{STAGE_LABELS[stage]}</span>
+  1818→                          <span style={{ fontSize: 13, color: 'var(--text)' }}>
+  1819→                            {stList.map((s, i) => <span key={s.id}>{i > 0 && ' , '}{s.name}</span>)}
+  1820→                          </span>
+  1821→                        </div>
+  1822→                      );
+  1823→                    })}
+  1824→                  </div>
+  1825→                )}
+  1826→              </div>
+  1827→            </div>
+  1828→            </React.Fragment>
+  1829→          );
+  1830→        })}
+  1831→      </div>
+  1832→    );
+  1833→  };
+  1834→
+  1835→  // ========== STATS PAGE (v6 — hours from assignments + standby) ==========
+  1836→  const renderStatsPage = () => {
+  1837→    if (!results?.assignments || teachers.length === 0) return <div className="card"><div className="empty-state"><p>No analytics to track.</p></div></div>;
+  1838→
+  1839→    // ---- Calculate ALL stats from actual assignments (source of truth) ----
+  1840→    const teacherStats: Record<string, {
+  1841→      totalComm: number; totalHours: number;
+  1842→      dayComm: Record<string, number>;
+  1843→      assignedSlots: {day:string;start:number;end:number}[];
+  1844→    }> = {};
+  1845→    teachers.forEach(t => {
+  1846→      teacherStats[t.id] = { totalComm: 0, totalHours: 0, dayComm: {} as Record<string,number>, assignedSlots: [] };
+  1847→      DAYS.forEach(d => { teacherStats[t.id].dayComm[d] = 0; });
+  1848→    });
+  1849→
+  1850→    for (const day of DAYS) {
+  1851→      const sessions = results.assignments[day] || [];
+  1852→      for (const sess of sessions) {
+  1853→        const ti = parseTimeRange(sess.time || '9:00-10:30');
+  1854→        for (const c of sess.committees) {
+  1855→          [c.t1, c.t2].forEach(who => {
+  1856→            if (!who.id) return;
+  1857→            const ts = teacherStats[who.id];
+  1858→            if (!ts) return;
+  1859→            ts.totalComm++;
+  1860→            ts.dayComm[day] = (ts.dayComm[day] || 0) + 1;
+  1861→            // Deduplicate hours: same day + same time range = counted once
+  1862→            if (!ts.assignedSlots.some(s => s.day === day && s.start === ti.start && s.end === ti.end)) {
+  1863→              ts.assignedSlots.push({ day, start: ti.start, end: ti.end });
+  1864→              ts.totalHours += ti.duration;
+  1865→            }
+  1866→          });
+  1867→        }
+  1868→      }
+  1869→    }
+  1870→
+  1871→    // Count standby — informational only, no hours/committees added
+  1872→    // (standby is displayed separately in results, not counted in stats)
+  1873→
+  1874→    // ---- Aggregate statistics ----
+  1875→    let totalComAll = 0, totalHrsAll = 0, notUsedCount = 0;
+  1876→    const activeHours: number[] = [];
+  1877→    teachers.forEach(t => {
+  1878→      const ts = teacherStats[t.id];
+  1879→      totalComAll += ts.totalComm;
+  1880→      totalHrsAll += ts.totalHours;
+  1881→      if (ts.totalComm === 0) notUsedCount++;
+  1882→      if (ts.totalHours > 0) activeHours.push(ts.totalHours);
+  1883→    });
+  1884→    const maxHrs = Math.max(...teachers.map(t => teacherStats[t.id].totalHours));
+  1885→    const minHrs = Math.min(...teachers.map(t => teacherStats[t.id].totalHours));
+  1886→    // Average among teachers who actually got assignments (more meaningful)
+  1887→    const avgHrs = activeHours.length > 0 ? activeHours.reduce((a, b) => a + b, 0) / activeHours.length : 0;
+  1888→    const overAvgCount = teachers.filter(t => teacherStats[t.id].totalHours > avgHrs && teacherStats[t.id].totalHours > 0).length;
+  1889→    const sorted = [...teachers].sort((a, b) => teacherStats[b.id].totalHours - teacherStats[a.id].totalHours);
+  1890→
+  1891→    return (
+  1892→      <>
+  1893→        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 12, marginBottom: 20 }}>
+  1894→          <div className="stat-card"><span className="stat-number">{totalHrsAll.toFixed(1)}</span><div className="stat-label">Total Hours (All)</div></div>
+  1895→          <div className="stat-card"><span className="stat-number">{avgHrs.toFixed(1)}</span><div className="stat-label">Avg Hours / Active</div></div>
+  1896→          <div className="stat-card"><span className="stat-number">{maxHrs.toFixed(1)}</span><div className="stat-label">Max Hours</div></div>
+  1897→          <div className="stat-card"><span className="stat-number" style={{ color: (maxHrs - minHrs) > 2 ? 'var(--danger)' : 'var(--accent3)' }}>{(maxHrs - minHrs).toFixed(1)}h</span><div className="stat-label">Max-Min Spread</div></div>
+  1898→          <div className="stat-card"><span className="stat-number" style={{ color: overAvgCount > 0 ? 'var(--danger)' : 'var(--accent3)' }}>{overAvgCount}</span><div className="stat-label">Over Avg</div></div>
+  1899→          <div className="stat-card"><span className="stat-number" style={{ color: 'var(--warning)' }}>{notUsedCount}</span><div className="stat-label">Not Assigned</div></div>
+  1900→        </div>
+  1901→        <div className="card">
+  1902→          <div className="card-title" style={{ marginBottom: 16 }}>Teacher Load Summary</div>
+  1903→          <div className="table-wrap" style={{ maxHeight: '70vh', overflow: 'auto' }}>
+  1904→            <table>
+  1905→              <thead>
+  1906→                <tr>
+  1907→                  <th>#</th><th>Teacher Name</th><th>Subject</th>
+  1908→                  {WEEK1_DAYS.map(d => <th key={d}>{d.replace('W1-','').slice(0,3)}</th>)}
+  1909→                  {WEEK2_DAYS.map(d => <th key={d} style={{ borderLeft: '2px solid var(--accent2)' }}>{d.replace('W2-','').slice(0,3)}</th>)}
+  1910→                  <th style={{ background: 'rgba(0,212,255,0.1)' }}>Total<br/>Committees</th>
+  1911→                  <th style={{ background: 'rgba(0,255,157,0.1)', minWidth: 100 }}>Total<br/>Hours</th>
+  1912→                  <th>Status</th>
+  1913→                </tr>
+  1914→              </thead>
+  1915→              <tbody>
+  1916→                {sorted.map((t, i) => {
+  1917→                  const ts = teacherStats[t.id];
+  1918→                  const hrs = ts.totalHours;
+  1919→                  const pct = maxHrs > 0 ? Math.round(hrs / maxHrs * 100) : 0;
+  1920→                  const isOverAvg = hrs > 0 && hrs > avgHrs;
+  1921→                  const hrsColor = hrs === 0 ? 'var(--text2)' : isOverAvg ? 'var(--danger)' : 'var(--accent3)';
+  1922→                  const status = hrs === 0
+  1923→                    ? <span className="badge" style={{ background: 'rgba(255,68,68,0.1)', color: 'var(--danger)' }}>Not Used</span>
+  1924→                    : isOverAvg
+  1925→                      ? <span className="badge" style={{ background: 'rgba(255,68,68,0.15)', color: 'var(--danger)', fontWeight: 700 }}>Over Avg</span>
+  1926→                      : <span className="badge" style={{ background: 'rgba(0,255,157,0.1)', color: 'var(--accent3)' }}>Balanced</span>;
+  1927→                  return (
+  1928→                    <tr key={t.id} style={isOverAvg ? { background: 'rgba(255,68,68,0.04)' } : {}}>
+  1929→                      <td style={{ color: 'var(--text2)' }}>{i + 1}</td>
+  1930→                      <td style={{ fontWeight: 600, color: 'var(--text)' }}>{t.name}</td>
+  1931→                      <td><span className="badge badge-blue">{t.subject}</span></td>
+  1932→                      {DAYS.map((d, di) => {
+  1933→                        const val = ts.dayComm[d] || 0;
+  1934→                        const cellColor = val >= 2 ? 'var(--danger)' : val === 1 ? 'var(--accent3)' : 'var(--text2)';
+  1935→                        return <td key={d} style={{ textAlign: 'center', fontWeight: 600, color: cellColor, ...(di === WEEK1_DAYS.length ? { borderLeft: '2px solid var(--accent2)' } : {}) }}>{val || '-'}</td>;
+  1936→                      })}
+  1937→                      <td style={{ textAlign: 'center', fontWeight: 700, color: 'var(--accent)', fontFamily: 'var(--mono)' }}>{ts.totalComm}</td>
+  1938→                      <td style={{ background: 'rgba(0,255,157,0.03)', padding: '8px 14px' }}>
+  1939→                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+  1940→                          <span style={{ fontFamily: 'var(--mono)', fontWeight: 700, color: hrsColor, minWidth: 48 }}>{hrs.toFixed(1)}h</span>
+  1941→                          <div style={{ flex: 1, height: 6, background: 'var(--border)', borderRadius: 3, overflow: 'hidden' }}>
+  1942→                            <div style={{ width: `${pct}%`, height: '100%', background: hrsColor, borderRadius: 3, transition: 'width 0.3s' }} />
+  1943→                          </div>
+  1944→                        </div>
+  1945→                      </td>
+  1946→                      <td>{status}</td>
+  1947→                    </tr>
+  1948→                  );
+  1949→                })}
+  1950→                <tr style={{ background: 'rgba(0,212,255,0.05)', fontWeight: 700 }}>
+  1951→                  <td colSpan={3} style={{ color: 'var(--accent)', fontWeight: 700 }}>TOTAL</td>
+  1952→                  {DAYS.map((d, di) => {
+  1953→                    const dayTotal = teachers.reduce((a, t) => a + teacherStats[t.id].dayComm[d], 0);
+  1954→                    return <td key={d} style={{ textAlign: 'center', color: 'var(--accent)', ...(di === WEEK1_DAYS.length ? { borderLeft: '2px solid var(--accent2)' } : {}) }}>{dayTotal}</td>;
+  1955→                  })}
+  1956→                  <td style={{ textAlign: 'center', color: 'var(--accent)', fontFamily: 'var(--mono)' }}>{totalComAll}</td>
+  1957→                  <td style={{ fontFamily: 'var(--mono)', fontWeight: 700, color: 'var(--accent3)', padding: '8px 14px' }}>{totalHrsAll.toFixed(1)}h</td>
+  1958→                  <td></td>
+  1959→                </tr>
+  1960→              </tbody>
+  1961→            </table>
+  1962→          </div>
+  1963→        </div>
+  1964→      </>
+  1965→    );
+  1966→  };
+  1967→
+  1968→  // ========== USERS PAGE (Admin Only) ==========
+  1969→  const renderUsersPage = () => {
+  1970→    const saveSupervisor = async () => {
+  1971→      if (!supFormName.trim() || !supFormPass.trim()) { showToast('Name and password required', 'error'); return; }
+  1972→      try {
+  1973→        const res = await fetch('/api/supervisors', {
+  1974→          method: 'POST',
+  1975→          headers: { 'Content-Type': 'application/json' },
+  1976→          body: JSON.stringify({ id: editingSupId, name: supFormName.trim(), password: supFormPass, permissions: supFormPermissions })
+  1977→        });
+  1978→        if (res.ok) {
+  1979→          const data = await res.json();
+  1980→          setSupervisors(data.supervisors);
+  1981→          logAudit(editingSupId ? 'user_edited' : 'user_added', `${editingSupId ? 'Edited' : 'Added'} supervisor: ${supFormName.trim()}`);
+  1982→          showToast(editingSupId ? 'User updated' : 'User added', 'success');
+  1983→          setSupFormName(''); setSupFormPass(''); setEditingSupId(null); setSupFormPermissions([]);
+  1984→        }
+  1985→      } catch { showToast('Error saving user', 'error'); }
+  1986→    };
+  1987→
+  1988→    const deleteSupervisor = async (id: string, name: string) => {
+  1989→      if (!confirm(`Delete user "${name}"?`)) return;
+  1990→      try {
+  1991→        await fetch(`/api/supervisors?id=${id}`, { method: 'DELETE' });
+  1992→        setSupervisors(prev => prev.filter(s => s.id !== id));
+  1993→        logAudit('user_deleted', `Deleted supervisor: ${name}`);
+  1994→        showToast('User deleted', 'success');
+  1995→      } catch { showToast('Error deleting', 'error'); }
+  1996→    };
+  1997→
+  1998→    return (
+  1999→      <div className="card">
+  2000→        <div className="card-header">
+  2001→          <div className="card-title">Manage Supervisors</div>
+  2002→        </div>
+  2003→        <div style={{ background: 'var(--surface2)', borderRadius: 10, padding: 20, marginBottom: 20 }}>
+  2004→          <div style={{ fontSize: 12, color: 'var(--text2)', marginBottom: 10, fontWeight: 600 }}>
+  2005→            {editingSupId ? 'EDIT SUPERVISOR' : 'ADD NEW SUPERVISOR'}
+  2006→          </div>
+  2007→          <div className="grid-3">
+  2008→            <div className="form-group">
+  2009→              <label className="form-label">Full Name</label>
+  2010→              <input className="form-input" value={supFormName} onChange={e => setSupFormName(e.target.value)} placeholder="e.g. Ahmed Mohamed" />
+  2011→            </div>
+  2012→            <div className="form-group">
+  2013→              <label className="form-label">Password</label>
+  2014→              <input className="form-input" type="text" value={supFormPass} onChange={e => setSupFormPass(e.target.value)} placeholder={editingSupId ? 'Leave blank to keep current' : 'Set password'} />
+  2015→            </div>
+  2016→            <div className="form-group" style={{ display: 'flex', alignItems: 'flex-end', gap: 8 }}>
+  2017→              <button className="btn btn-primary" onClick={saveSupervisor} style={{ flex: 1 }}>
+  2018→                {editingSupId ? '✓ Update' : '+ Add User'}
+  2019→              </button>
+  2020→              {editingSupId && (
+  2021→                <button className="btn btn-ghost" onClick={() => { setEditingSupId(null); setSupFormName(''); setSupFormPass(''); setSupFormPermissions([]); }}>Cancel</button>
+  2022→              )}
+  2023→            </div>
+  2024→          </div>
+  2025→          <div style={{ marginTop: 12, padding: '12px 16px', background: 'var(--surface)', borderRadius: 8, border: '1px solid var(--border)' }}>
+  2026→            <div style={{ fontSize: 12, color: 'var(--text2)', marginBottom: 10, fontWeight: 600 }}>Access Permissions:</div>
+  2027→            <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap' }}>
+  2028→              {['teachers', 'schedule', 'results', 'stats'].map(perm => (
+  2029→                <div key={perm} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+  2030→                  <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer', color: 'var(--text)' }}>
+  2031→                    <input
+  2032→                      type="checkbox"
+  2033→                      checked={supFormPermissions.includes(perm)}
+  2034→                      onChange={e => {
+  2035→                        if (e.target.checked) setSupFormPermissions(prev => [...prev, perm]);
+  2036→                        else setSupFormPermissions(prev => prev.filter(p => p !== perm && p !== 'schedule_edit'));
+  2037→                      }}
+  2038→                      style={{ width: 16, height: 16, accentColor: 'var(--accent)' }}
+  2039→                    />
+  2040→                    {perm === 'teachers' ? 'Teachers Page' : perm === 'schedule' ? 'Schedule Page' : perm === 'results' ? 'Results Page' : 'Statistics Page'}
+  2041→                  </label>
+  2042→                  {perm === 'schedule' && supFormPermissions.includes('schedule') && (
+  2043→                    <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, cursor: 'pointer', color: 'var(--text2)', paddingLeft: 22 }}>
+  2044→                      <input
+  2045→                        type="checkbox"
+  2046→                        checked={supFormPermissions.includes('schedule_edit')}
+  2047→                        onChange={e => {
+  2048→                          if (e.target.checked) setSupFormPermissions(prev => [...prev, 'schedule_edit']);
+  2049→                          else setSupFormPermissions(prev => prev.filter(p => p !== 'schedule_edit'));
+  2050→                        }}
+  2051→                        style={{ width: 14, height: 14, accentColor: 'var(--accent2)' }}
+  2052→                      />
+  2053→                      Can Edit Schedule?
+  2054→                    </label>
+  2055→                  )}
+  2056→                </div>
+  2057→              ))}
+  2058→            </div>
+  2059→          </div>
+  2060→        </div>
+  2061→        <div className="table-wrap">
+  2062→          <table>
+  2063→            <thead>
+  2064→              <tr>
+  2065→                <th>#</th><th>Name</th><th>Permissions</th><th>Actions</th>
+  2066→              </tr>
+  2067→            </thead>
+  2068→            <tbody>
+  2069→              {supervisors.length === 0 ? (
+  2070→                <tr><td colSpan={4} style={{ textAlign: 'center', padding: 32, color: 'var(--text2)' }}>No supervisors added yet. Add users above.</td></tr>
+  2071→              ) : supervisors.map((s, i) => (
+  2072→                <tr key={s.id}>
+  2073→                  <td style={{ color: 'var(--text2)' }}>{i + 1}</td>
+  2074→                  <td style={{ fontWeight: 600, color: 'var(--text)' }}>{s.name}</td>
+  2075→                  <td style={{ fontSize: 12 }}>
+  2076→                    {(s.permissions && s.permissions.length > 0) ? s.permissions.map(p => (
+  2077→                      <span key={p} className="badge badge-blue" style={{ marginRight: 4, ...(p === 'schedule_edit' ? { background: 'var(--accent2)', color: '#fff' } : {}) }}>{p === 'schedule_edit' ? 'Edit' : p}</span>
+  2078→                    )) : <span style={{ color: 'var(--text2)' }}>Default (view only)</span>}
+  2079→                  </td>
+  2080→                  <td>
+  2081→                    <button className="action-btn edit-btn" onClick={() => { setEditingSupId(s.id); setSupFormName(s.name); setSupFormPass(''); setSupFormPermissions(s.permissions || []); }}>Edit</button>
+  2082→                    <button className="action-btn del-btn" onClick={() => deleteSupervisor(s.id, s.name)}>Remove</button>
+  2083→                  </td>
+  2084→                </tr>
+  2085→              ))}
+  2086→            </tbody>
+  2087→          </table>
+  2088→        </div>
+  2089→      </div>
+  2090→    );
+  2091→  };
+  2092→
+  2093→  // ========== LOG PAGE (Admin Only) — single tab with sub-view choice ==========
+  2094→  const renderLogPage = () => {
+  2095→    const entries = logView === 'admin'
+  2096→      ? auditLog.filter(e => e.user === 'Admin')
+  2097→      : auditLog.filter(e => e.user !== 'Admin');
+  2098→    const showUser = logView === 'users';
+  2099→    return (
+  2100→      <div className="card">
+  2101→        <div className="card-header">
+  2102→          <div className="card-title">Activity Log</div>
+  2103→          <button className="btn btn-ghost" onClick={loadAuditLog}>↻ Refresh</button>
+  2104→        </div>
+  2105→        <div style={{ display: 'flex', gap: 10, marginBottom: 20 }}>
+  2106→          <button
+  2107→            onClick={() => setLogView('admin')}
+  2108→            style={{
+  2109→              flex: 1, padding: '14px 20px', borderRadius: 10, border: 'none', cursor: 'pointer',
+  2110→              fontFamily: 'var(--sans)', fontSize: 14, fontWeight: 700, transition: 'all 0.2s',
+  2111→              background: logView === 'admin' ? 'var(--accent2)' : 'var(--surface2)',
+  2112→              color: logView === 'admin' ? '#fff' : 'var(--text2)'
+  2113→            }}
+  2114→          >
+  2115→            🔐 Admin Log
+  2116→          </button>
+  2117→          <button
+  2118→            onClick={() => setLogView('users')}
+  2119→            style={{
+  2120→              flex: 1, padding: '14px 20px', borderRadius: 10, border: 'none', cursor: 'pointer',
+  2121→              fontFamily: 'var(--sans)', fontSize: 14, fontWeight: 700, transition: 'all 0.2s',
+  2122→              background: logView === 'users' ? 'var(--accent)' : 'var(--surface2)',
+  2123→              color: logView === 'users' ? 'var(--bg)' : 'var(--text2)'
+  2124→            }}
+  2125→          >
+  2126→            👥 Users Log
+  2127→          </button>
+  2128→        </div>
+  2129→        {entries.length === 0 ? (
+  2130→          <div className="empty-state"><p>No {logView === 'admin' ? 'admin' : 'user'} activity recorded yet.</p></div>
+  2131→        ) : (
+  2132→          <div className="table-wrap" style={{ maxHeight: '70vh', overflow: 'auto' }}>
+  2133→            <table>
+  2134→              <thead>
+  2135→                <tr>
+  2136→                  <th>#</th><th>Time</th>{showUser && <th>User</th>}<th>Action</th><th>Details</th>
+  2137→                </tr>
+  2138→              </thead>
+  2139→              <tbody>
+  2140→                {entries.map((entry, i) => {
+  2141→                  const time = new Date(entry.timestamp);
+  2142→                  const timeStr = time.toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+  2143→                  const actionColor = entry.action.includes('delete') ? 'var(--danger)' : entry.action.includes('add') ? 'var(--accent3)' : 'var(--accent)';
+  2144→                  return (
+  2145→                    <tr key={entry.id || i}>
+  2146→                      <td style={{ color: 'var(--text2)' }}>{i + 1}</td>
+  2147→                      <td style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text2)', whiteSpace: 'nowrap' }}>{timeStr}</td>
+  2148→                      {showUser && <td style={{ fontWeight: 600, color: 'var(--text)' }}>{entry.user}</td>}
+  2149→                      <td><span className="badge" style={{ background: `${actionColor}15`, color: actionColor, textTransform: 'capitalize' }}>{entry.action.replace(/_/g, ' ')}</span></td>
+  2150→                      <td style={{ color: 'var(--text2)', fontSize: 12 }}>{entry.details}</td>
+  2151→                    </tr>
+  2152→                  );
+  2153→                })}
+  2154→              </tbody>
+  2155→            </table>
+  2156→          </div>
+  2157→        )}
+  2158→      </div>
+  2159→    );
+  2160→  };
+  2161→
+  2162→  // ========== MAIN APP RENDER ==========
+  2163→  const hasResults = !!(results?.assignments && results?.standbys && results?.tracking);
+  2164→  const pages: { key: Page; label: string; adminOnly: boolean; requiresResults?: boolean }[] = [
+  2165→    { key: 'teachers', label: '👨‍🏫 Teachers', adminOnly: false },
+  2166→    { key: 'schedule', label: '📅 Schedule', adminOnly: false },
+  2167→    { key: 'distribute', label: '⚡ Distribute', adminOnly: true },
+  2168→    { key: 'results', label: '📋 Results', adminOnly: false },
+  2169→    { key: 'stats', label: '📊 Statistics', adminOnly: false, requiresResults: true },
+  2170→    { key: 'users', label: '👥 Users', adminOnly: true },
+  2171→    { key: 'log', label: '📝 Log', adminOnly: true },
+  2172→  ];
+  2173→
+  2174→  const visiblePages = pages.filter(p => {
+  2175→    if (!canAccessPage(p.key)) return false;
+  2176→    if (p.requiresResults && !hasResults) return false;
+  2177→    return true;
+  2178→  });
+  2179→
+  2180→  return (
+  2181→    <div className="app">
+  2182→      {/* Header */}
+  2183→      <header>
+  2184→        <div className="logo">
+  2185→          <div className="logo-dot" />
+  2186→          EXAM · SUPERVISOR · EQUALIZER · v10
+  2187→        </div>
+  2188→        <div className="header-actions">
+  2189→          <span className="badge" style={{ background: `${roleColor}22`, color: roleColor }}>{roleLabel}</span>
+  2190→          <span style={{ fontSize: 11, display: 'flex', alignItems: 'center', gap: 4 }}>
+  2191→            <span style={{ width: 6, height: 6, borderRadius: '50%', background: isConnected ? 'var(--success)' : 'var(--danger)' }} />
+  2192→            {isConnected ? 'Live' : 'Offline'}
+  2193→          </span>
+  2194→          <button className="btn btn-ghost" onClick={exportCSV}>📥 Export CSV</button>
+  2195→          {isAdmin && (
+  2196→          <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--text2)' }}>
+  2197→            <span>User Edit:</span>
+  2198→            <button
+  2199→              onClick={() => toggleUserEditPermission(!userCanEditTeachers)}
+  2200→              style={{ width: 36, height: 20, borderRadius: 10, border: 'none', cursor: 'pointer', position: 'relative', transition: 'background 0.2s', background: userCanEditTeachers ? 'var(--success)' : 'var(--border)' }}
+  2201→            >
+  2202→              <div style={{ width: 16, height: 16, borderRadius: '50%', background: '#fff', position: 'absolute', top: 2, left: userCanEditTeachers ? 18 : 2, transition: 'left 0.2s' }} />
+  2203→            </button>
+  2204→          </div>
+  2205→          )}
+  2206→          {isAdmin && <button className="btn btn-ghost" onClick={resetAll}>🗑 Reset All</button>}
+  2207→          <button className="btn btn-ghost" onClick={handleLogout}>🚪 Logout</button>
+  2208→        </div>
+  2209→      </header>
+  2210→
+  2211→      {/* Nav Tabs */}
+  2212→      <div className="nav-tabs">
+  2213→        {visiblePages.map(p => (
+  2214→          <div
+  2215→            key={p.key}
+  2216→            className={'nav-tab' + (activePage === p.key ? ' active' : '')}
+  2217→            onClick={() => setActivePage(p.key)}
+  2218→          >
+  2219→            {p.label}
+  2220→          </div>
+  2221→        ))}
+  2222→      </div>
+  2223→
+  2224→      {/* Main Content */}
+  2225→      <main className="main">
+  2226→        {loading ? (
+  2227→          <div style={{ textAlign: 'center', padding: 64, color: 'var(--text2)' }}>
+  2228→            <div style={{ width: 24, height: 24, border: '2px solid var(--border)', borderTopColor: 'var(--accent)', borderRadius: '50%', animation: 'spin 0.8s linear infinite', margin: '0 auto 12px' }} />
+  2229→            Loading...
+  2230→          </div>
+  2231→        ) : (
+  2232→          <>
+  2233→            {activePage === 'teachers' && renderTeachersPage()}
+  2234→            {activePage === 'schedule' && renderSchedulePage()}
+  2235→            {activePage === 'distribute' && renderDistributePage()}
+  2236→            {activePage === 'results' && renderResultsPage()}
+  2237→            {activePage === 'stats' && renderStatsPage()}
+  2238→            {activePage === 'users' && renderUsersPage()}
+  2239→            {activePage === 'log' && renderLogPage()}
+  2240→          </>
+  2241→        )}
+  2242→      </main>
+  2243→
+  2244→      {/* Toast */}
+  2245→      <div id="app-toast" className="toast" />
+  2246→    </div>
+  2247→  );
+  2248→}
