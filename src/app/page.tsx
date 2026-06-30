@@ -4,6 +4,8 @@ export const dynamic = 'force-dynamic';
 
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { createClient, RealtimeChannel } from '@supabase/supabase-js';
+import html2canvas from 'html2canvas';
+import jsPDF from 'jspdf';
 
 // ========== CONSTANTS ==========
 const WEEK1_DAYS = ['W1-Saturday','W1-Sunday','W1-Monday','W1-Tuesday','W1-Wednesday','W1-Thursday'];
@@ -1217,9 +1219,9 @@ export default function ExamSystem() {
   };
 
   // ========== EXPORT PDF (Arabic table, A4 per grade per day) ==========
-  // ========== EXPORT PDF (Arabic table via print) ==========
-  const exportPDF = () => {
+  const exportPDF = async () => {
     if (!results?.assignments) return;
+    showToast('Generating PDF...', 'info');
 
     const DAY_AR: Record<string, string> = {
       'W1-Saturday': '\u0627\u0644\u0633\u0628\u062a', 'W1-Sunday': '\u0627\u0644\u0623\u062d\u062f', 'W1-Monday': '\u0627\u0644\u0627\u062b\u0646\u064a\u0646',
@@ -1239,7 +1241,6 @@ export default function ExamSystem() {
     };
 
     let htmlPages = '';
-
     for (const day of DAYS) {
       const sessions = results.assignments[day] || [];
       const dayStandbys = results.standbys?.[day];
@@ -1248,14 +1249,12 @@ export default function ExamSystem() {
       const weekKey = day.startsWith('W1') ? 'W1' : 'W2';
       const dayAr = DAY_AR[day] || day;
       const weekAr = WEEK_AR[weekKey] || '';
-
       for (const session of sessions) {
         if (session.committees.length === 0) continue;
         const rowsHtml = session.committees.map((c: any) =>
           '<tr><td rowspan="2" class="num-cell">' + c.serial + '</td><td class="name-cell">' + c.t1.name + '</td><td class="sig-cell"></td><td class="notes-cell"></td></tr>' +
           '<tr class="row2"><td class="name-cell">' + c.t2.name + '</td><td class="sig-cell"></td><td class="notes-cell"></td></tr>'
         ).join('');
-
         htmlPages += '<div class="page"><div class="header-title">\u062c\u062f\u0648\u0644 \u0625\u0634\u0631\u0627\u0641 \u0627\u0644\u0627\u0645\u062a\u062d\u0627\u0646\u0627\u062a</div>' +
           '<div class="header-info"><div><span class="label">\u0627\u0644\u064a\u0648\u0645:</span> ' + dayAr + ' (' + weekAr + ')</div>' +
           '<div><span class="label">\u0627\u0644\u0635\u0641:</span> ' + (GRADE_AR[session.grade] || session.grade) + '</div>' +
@@ -1264,7 +1263,6 @@ export default function ExamSystem() {
           '<table><thead><tr><th class="th-num">\u0645</th><th class="th-name">\u0627\u0644\u0627\u0633\u0645</th><th class="th-sig">\u0627\u0644\u062a\u0648\u0642\u064a\u0639</th><th class="th-notes">\u0627\u0644\u0645\u0644\u0627\u062d\u0638\u0627\u062a</th></tr></thead>' +
           '<tbody>' + rowsHtml + '</tbody></table></div>';
       }
-
       if (hasDayStandby) {
         const stList: { stage: string; name: string }[] = [];
         for (const stage of ['primary', 'prep', 'sec']) {
@@ -1279,27 +1277,52 @@ export default function ExamSystem() {
         }
       }
     }
-
     if (!htmlPages) { showToast('No results to export', 'error'); return; }
-    const printWin = window.open('', '_blank');
-    if (!printWin) { showToast('Please allow popups', 'error'); return; }
-    const css = '*{margin:0;padding:0;box-sizing:border-box}body{font-family:Arial,Helvetica,sans-serif;color:#000;background:#fff}' +
-      '.page{width:210mm;min-height:297mm;padding:15mm 12mm;page-break-after:always}.page:last-child{page-break-after:auto}' +
-      '.header-title{text-align:center;font-size:18pt;font-weight:bold;color:#1e3a5f;border-bottom:3px double #1e3a5f;padding-bottom:6px;margin-bottom:14px;width:100%}' +
+
+    const css = '*{margin:0;padding:0;box-sizing:border-box}' +
+      'body{font-family:Arial,Helvetica,sans-serif;color:#000;background:#fff}' +
+      '.page{width:794px;min-height:1123px;padding:50px 40px;background:#fff}' +
+      '.header-title{text-align:center;font-size:22px;font-weight:bold;color:#1e3a5f;border-bottom:3px double #1e3a5f;padding-bottom:8px;margin-bottom:16px;width:100%}' +
       '.header-title.standby{color:#b47814;border-bottom-color:#b47814}' +
-      '.header-info{display:flex;flex-wrap:wrap;justify-content:space-between;font-size:11pt;margin-bottom:14px;padding:8px 12px;background:#f0f4f8;border-radius:6px;border:1px solid #d0d8e0;font-weight:bold}' +
+      '.header-info{display:flex;flex-wrap:wrap;justify-content:space-between;font-size:13px;margin-bottom:16px;padding:10px 14px;background:#f0f4f8;border-radius:6px;border:1px solid #d0d8e0;font-weight:bold}' +
       '.header-info.standby{background:#fffbeb;border-color:#fde68a}.header-info .label{color:#555}' +
-      'table{width:100%;border-collapse:collapse;margin-top:8px}thead tr{background:#1e3a5f;color:#fff}thead tr.standby-hdr{background:#b47814}' +
-      'th{border:1px solid #333;padding:8px 6px;text-align:center;font-size:11pt}.th-num{width:40px}.th-name{width:auto}.th-sig{width:80px}.th-notes{width:120px}.th-stage{width:120px}' +
-      'td{border:1px solid #333;padding:7px 8px;text-align:center;font-size:12pt;color:#000}' +
-      '.num-cell{font-size:11pt;vertical-align:middle;width:40px;color:#000}' +
-      '.name-cell{font-weight:bold;font-size:12pt;color:#000;text-align:center}' +
-      '.sig-cell{width:80px}.notes-cell{width:120px}.stage-cell{font-size:10pt;color:#555}' +
-      'tr.row2 td{border-top:none}' +
-      '@media print{.page{margin:0;padding:12mm 10mm}}';
-    printWin.document.write('<!DOCTYPE html><html dir="rtl" lang="ar"><head><meta charset="UTF-8"><style>' + css + '</style></head><body>' + htmlPages + '<' + 'script>window.onafterprint=function(){window.close()};setTimeout(function(){window.print()},400)</' + 'script></body></html>');
-    printWin.document.close();
-    showToast('Print dialog opened - save as PDF', 'success');
+      'table{width:100%;border-collapse:collapse;margin-top:10px}' +
+      'thead tr{background:#1e3a5f;color:#fff}thead tr.standby-hdr{background:#b47814}' +
+      'th{border:1px solid #333;padding:8px 6px;text-align:center;font-size:13px}' +
+      '.th-num{width:40px}.th-name{width:auto}.th-sig{width:90px}.th-notes{width:130px}.th-stage{width:130px}' +
+      'td{border:1px solid #333;padding:8px 10px;text-align:center;font-size:14px;color:#000}' +
+      '.num-cell{font-size:14px;vertical-align:middle;width:40px;color:#000}' +
+      '.name-cell{font-weight:bold;font-size:14px;color:#000;text-align:center}' +
+      '.sig-cell{width:90px}.notes-cell{width:130px}.stage-cell{font-size:12px;color:#555}' +
+      'tr.row2 td{border-top:none}';
+
+    const container = document.createElement('div');
+    container.style.cssText = 'position:fixed;top:-9999px;left:0;width:794px;z-index:-1;background:#fff;';
+    container.innerHTML = '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;700&display=swap"><style>' + css + '</style><div style="direction:rtl;font-family:\'Cairo\',Arial,Helvetica,sans-serif;color:#000;background:#fff;">' + htmlPages + '</div>';
+    document.body.appendChild(container);
+
+    try {
+      await new Promise(r => setTimeout(r, 800));
+      const pages = container.querySelectorAll('.page');
+      const pdf = new jsPDF({ orientation: 'p', unit: 'mm', format: 'a4' });
+      const pdfW = 210, pdfH = 297;
+
+      for (let i = 0; i < pages.length; i++) {
+        if (i > 0) pdf.addPage();
+        const canvas = await html2canvas(pages[i] as HTMLElement, { scale: 2, useCORS: true, backgroundColor: '#ffffff', logging: false });
+        const imgW = pdfW;
+        const imgH = (canvas.height * pdfW) / canvas.width;
+        pdf.addImage(canvas.toDataURL('image/jpeg', 0.95), 'JPEG', 0, 0, imgW, Math.min(imgH, pdfH));
+      }
+
+      pdf.save('exam-supervision.pdf');
+      showToast('PDF downloaded!', 'success');
+    } catch (err) {
+      console.error('PDF generation error:', err);
+      showToast('Error generating PDF', 'error');
+    } finally {
+      document.body.removeChild(container);
+    }
   };
 
 
