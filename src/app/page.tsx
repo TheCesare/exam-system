@@ -108,6 +108,7 @@ export default function ExamSystem() {
   const [supFormName, setSupFormName] = useState('');
   const [supFormPass, setSupFormPass] = useState('');
   const [editingSupId, setEditingSupId] = useState<string | null>(null);
+  const [changeSupPass, setChangeSupPass] = useState(false);
   const [supFormPermissions, setSupFormPermissions] = useState<string[]>([]);
 
   // Data state
@@ -1948,19 +1949,21 @@ setUserPermissions([]);
   // ========== USERS PAGE (Admin Only) ==========
   const renderUsersPage = () => {
     const saveSupervisor = async () => {
-      if (!supFormName.trim() || !supFormPass.trim()) { showToast('Name and password required', 'error'); return; }
+      if (!supFormName.trim()) { showToast('Name is required', 'error'); return; }
+      if (!editingSupId && !supFormPass.trim()) { showToast('Password is required for new users', 'error'); return; }
+      if (editingSupId && changeSupPass && !supFormPass.trim()) { showToast('Enter the new password', 'error'); return; }
       try {
         const res = await fetch('/api/supervisors', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ id: editingSupId, name: supFormName.trim(), password: supFormPass, permissions: supFormPermissions })
+          body: JSON.stringify({ id: editingSupId, name: supFormName.trim(), password: (!editingSupId || changeSupPass) ? supFormPass : '', permissions: supFormPermissions })
         });
         if (res.ok) {
           const data = await res.json();
           setSupervisors(data.supervisors);
           logAudit(editingSupId ? 'user_edited' : 'user_added', `${editingSupId ? 'Edited' : 'Added'} supervisor: ${supFormName.trim()}`);
           showToast(editingSupId ? 'User updated' : 'User added', 'success');
-          setSupFormName(''); setSupFormPass(''); setEditingSupId(null); setSupFormPermissions([]);
+          setSupFormName(''); setSupFormPass(''); setEditingSupId(null); setSupFormPermissions([]); setChangeSupPass(false);
         }
       } catch { showToast('Error saving user', 'error'); }
     };
@@ -1990,15 +1993,36 @@ setUserPermissions([]);
               <input className="form-input" value={supFormName} onChange={e => setSupFormName(e.target.value)} placeholder="e.g. Ahmed Mohamed" />
             </div>
             <div className="form-group">
-              <label className="form-label">Password</label>
-              <input className="form-input" type="text" value={supFormPass} onChange={e => setSupFormPass(e.target.value)} placeholder={editingSupId ? 'Leave blank to keep current' : 'Set password'} />
+              <label className="form-label">
+                Password
+                {editingSupId && (
+                  <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, cursor: 'pointer', color: 'var(--accent)', marginLeft: 12, fontWeight: 500 }}>
+                    <input
+                      type="checkbox"
+                      checked={changeSupPass}
+                      onChange={e => { setChangeSupPass(e.target.checked); if (!e.target.checked) setSupFormPass(''); }}
+                      style={{ width: 15, height: 15, accentColor: 'var(--accent)' }}
+                    />
+                    Change password
+                  </label>
+                )}
+              </label>
+              <input
+                className="form-input"
+                type={editingSupId ? 'password' : 'text'}
+                value={supFormPass}
+                onChange={e => setSupFormPass(e.target.value)}
+                placeholder={editingSupId ? (changeSupPass ? 'Enter new password' : 'Leave blank to keep current') : 'Set password'}
+                disabled={!!(editingSupId && !changeSupPass)}
+                style={editingSupId && !changeSupPass ? { opacity: 0.4 } : undefined}
+              />
             </div>
             <div className="form-group" style={{ display: 'flex', alignItems: 'flex-end', gap: 8 }}>
               <button className="btn btn-primary" onClick={saveSupervisor} style={{ flex: 1 }}>
                 {editingSupId ? '✓ Update' : '+ Add User'}
               </button>
               {editingSupId && (
-                <button className="btn btn-ghost" onClick={() => { setEditingSupId(null); setSupFormName(''); setSupFormPass(''); setSupFormPermissions([]); }}>Cancel</button>
+                <button className="btn btn-ghost" onClick={() => { setEditingSupId(null); setSupFormName(''); setSupFormPass(''); setSupFormPermissions([]); setChangeSupPass(false); }}>Cancel</button>
               )}
             </div>
           </div>
@@ -2058,7 +2082,7 @@ setUserPermissions([]);
                     )) : <span style={{ color: 'var(--text2)' }}>Default (view only)</span>}
                   </td>
                   <td>
-                    <button className="action-btn edit-btn" onClick={() => { setEditingSupId(s.id); setSupFormName(s.name); setSupFormPass(''); setSupFormPermissions(s.permissions || []); }}>Edit</button>
+                    <button className="action-btn edit-btn" onClick={() => { setEditingSupId(s.id); setSupFormName(s.name); setSupFormPass(''); setSupFormPermissions(s.permissions || []); setChangeSupPass(false); }}>Edit</button>
                     <button className="action-btn del-btn" onClick={() => deleteSupervisor(s.id, s.name)}>Remove</button>
                   </td>
                 </tr>
