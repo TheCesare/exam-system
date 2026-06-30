@@ -88,6 +88,10 @@ export default function ExamSystem() {
   const [loginError, setLoginError] = useState('');
   const [loginMode, setLoginMode] = useState<'user' | 'admin' | null>(null);
   const [showChangePassword, setShowChangePassword] = useState(false);
+  const [showLoginPass, setShowLoginPass] = useState(false);
+  const [showCurPass, setShowCurPass] = useState(false);
+  const [showNewPass, setShowNewPass] = useState(false);
+  const [showConfPass, setShowConfPass] = useState(false);
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -1456,15 +1460,18 @@ setUserPermissions([]);
                   style={{ padding: '14px 16px', borderRadius: 10, background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text)', fontSize: 15, fontFamily: 'var(--sans)', outline: 'none', width: '100%' }}
                 />
               )}
-              <input
-                type="password"
+              <div style={{ position: 'relative' }}>
+                <input
+                type={showLoginPass ? 'text' : 'password'}
                 placeholder={loginMode === 'user' ? 'Enter Password' : 'Enter Admin Password'}
                 value={password}
                 onChange={e => { setPassword(e.target.value); setLoginError(''); }}
                 onKeyDown={e => e.key === 'Enter' && handleLogin(loginMode)}
                 autoFocus={loginMode === 'admin'}
-                style={{ padding: '14px 16px', borderRadius: 10, background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text)', fontSize: 15, fontFamily: 'var(--sans)', outline: 'none', textAlign: 'center', width: '100%' }}
+                style={{ padding: '14px 44px 14px 16px', borderRadius: 10, background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text)', fontSize: 15, fontFamily: 'var(--sans)', outline: 'none', textAlign: 'center', width: '100%' }}
               />
+              <button type="button" onClick={() => setShowLoginPass(!showLoginPass)} style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', fontSize: 18, color: 'var(--text2)', padding: 4, lineHeight: 1 }}>{showLoginPass ? '🙈' : '👁'}</button>
+              </div>
               <button
                 onClick={() => handleLogin(loginMode)}
                 style={{
@@ -2224,29 +2231,38 @@ setUserPermissions([]);
           <div style={{ background: 'var(--surface)', borderRadius: 16, padding: 28, width: 380, maxWidth: '90vw', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }} onClick={e => e.stopPropagation()}>
             <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 20, textAlign: 'center', color: 'var(--text)' }}>🔑 Change Password</div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <div style={{ position: 'relative' }}>
               <input
-                type="password"
+                type={showCurPass ? 'text' : 'password'}
                 placeholder="Current Password"
                 value={currentPassword}
                 onChange={e => { setCurrentPassword(e.target.value); setChangePassError(''); }}
-                style={{ padding: '12px 14px', borderRadius: 8, background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text)', fontSize: 14, fontFamily: 'var(--sans)', outline: 'none', width: '100%' }}
+                style={{ padding: '12px 44px 12px 14px', borderRadius: 8, background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text)', fontSize: 14, fontFamily: 'var(--sans)', outline: 'none', width: '100%' }}
                 autoFocus
               />
+              <button type="button" onClick={() => setShowCurPass(!showCurPass)} style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', fontSize: 18, color: 'var(--text2)', padding: 4, lineHeight: 1 }}>{showCurPass ? '🙈' : '👁'}</button>
+              </div>
+              <div style={{ position: 'relative' }}>
               <input
-                type="password"
+                type={showNewPass ? 'text' : 'password'}
                 placeholder="New Password"
                 value={newPassword}
                 onChange={e => { setNewPassword(e.target.value); setChangePassError(''); }}
-                style={{ padding: '12px 14px', borderRadius: 8, background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text)', fontSize: 14, fontFamily: 'var(--sans)', outline: 'none', width: '100%' }}
+                style={{ padding: '12px 44px 12px 14px', borderRadius: 8, background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text)', fontSize: 14, fontFamily: 'var(--sans)', outline: 'none', width: '100%' }}
               />
+              <button type="button" onClick={() => setShowNewPass(!showNewPass)} style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', fontSize: 18, color: 'var(--text2)', padding: 4, lineHeight: 1 }}>{showNewPass ? '🙈' : '👁'}</button>
+              </div>
+              <div style={{ position: 'relative' }}>
               <input
-                type="password"
+                type={showConfPass ? 'text' : 'password'}
                 placeholder="Confirm New Password"
                 value={confirmPassword}
                 onChange={e => { setConfirmPassword(e.target.value); setChangePassError(''); }}
                 onKeyDown={e => e.key === 'Enter' && handleChangePassword()}
-                style={{ padding: '12px 14px', borderRadius: 8, background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text)', fontSize: 14, fontFamily: 'var(--sans)', outline: 'none', width: '100%' }}
+                style={{ padding: '12px 44px 12px 14px', borderRadius: 8, background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text)', fontSize: 14, fontFamily: 'var(--sans)', outline: 'none', width: '100%' }}
               />
+              <button type="button" onClick={() => setShowConfPass(!showConfPass)} style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', fontSize: 18, color: 'var(--text2)', padding: 4, lineHeight: 1 }}>{showConfPass ? '🙈' : '👁'}</button>
+              </div>
               {changePassError && <p style={{ color: 'var(--danger)', fontSize: 12, margin: '-4px 0 0' }}>{changePassError}</p>}
               <div style={{ display: 'flex', gap: 10, marginTop: 4 }}>
                 <button
