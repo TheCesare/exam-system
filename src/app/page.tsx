@@ -5,7 +5,7 @@ export const dynamic = 'force-dynamic';
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { createClient, RealtimeChannel } from '@supabase/supabase-js';
 import jsPDF from 'jspdf';
-import autoTable from 'jspdf-autotable';
+import html2canvas from 'html2canvas';
 
 // ========== CONSTANTS ==========
 const WEEK1_DAYS = ['W1-Saturday','W1-Sunday','W1-Monday','W1-Tuesday','W1-Wednesday','W1-Thursday'];
@@ -1218,159 +1218,194 @@ export default function ExamSystem() {
     URL.revokeObjectURL(url);
   };
 
-  // ========== EXPORT PDF (A4 per grade per day) ==========
-  const exportPDF = () => {
+  // ========== EXPORT PDF (Arabic, A4 per grade per day) ==========
+  const exportPDF = async () => {
     if (!results?.assignments) return;
+
+    // Arabic mappings
+    const DAY_AR: Record<string, string> = {
+      'W1-Saturday': 'السبت', 'W1-Sunday': 'الأحد', 'W1-Monday': 'الاثنين',
+      'W1-Tuesday': 'الثلاثاء', 'W1-Wednesday': 'الأربعاء', 'W1-Thursday': 'الخميس',
+      'W2-Saturday': 'السبت', 'W2-Sunday': 'الأحد', 'W2-Monday': 'الاثنين',
+      'W2-Tuesday': 'الثلاثاء', 'W2-Wednesday': 'الأربعاء', 'W2-Thursday': 'الخميس',
+    };
+    const WEEK_AR: Record<string, string> = { 'W1': 'الأسبوع الأول', 'W2': 'الأسبوع الثاني' };
+    const GRADE_AR: Record<string, string> = {
+      'Grade 3 Primary': 'الصف الثالث الابتدائي',
+      'Grade 4 Primary': 'الصف الرابع الابتدائي',
+      'Grade 5 Primary': 'الصف الخامس الابتدائي',
+      'Grade 6 Primary': 'الصف السادس الابتدائي',
+      'Grade 1 Prep': 'الصف الأول الإعدادي',
+      'Grade 2 Prep': 'الصف الثاني الإعدادي',
+      'Grade 1 Secondary': 'الصف الأول الثانوي',
+      'Grade 2 Secondary': 'الصف الثاني الثانوي',
+    };
+    const STAGE_AR: Record<string, string> = {
+      primary: 'المرحلة الابتدائية', prep: 'المرحلة الإعدادية', sec: 'المرحلة الثانوية',
+    };
+
     const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
-    const pageW = 210, pageH = 297, margin = 15;
+    const pageW = 210, pageH = 297;
     let firstPage = true;
+    const container = document.createElement('div');
+    container.style.cssText = 'position:fixed;top:-9999px;left:0;width:794px;z-index:-1;direction:rtl;font-family:"Segoe UI",Tahoma,Arial,sans-serif;color:#000;background:#fff;';
+
+    const pages: HTMLDivElement[] = [];
 
     for (const day of DAYS) {
       const sessions = results.assignments[day] || [];
+      const dayStandbys = results.standbys?.[day];
+      const hasDayStandby = dayStandbys && Object.values(dayStandbys).some(s => s.length > 0);
+      if (sessions.length === 0 && !hasDayStandby) continue;
+
+      const weekKey = day.startsWith('W1') ? 'W1' : 'W2';
+      const dayAr = DAY_AR[day] || day;
+      const weekAr = WEEK_AR[weekKey] || '';
+
       for (const session of sessions) {
         if (session.committees.length === 0) continue;
 
-        if (!firstPage) doc.addPage();
-        firstPage = false;
+        const pageDiv = document.createElement('div');
+        pageDiv.style.cssText = 'width:794px;padding:40px 50px;box-sizing:border-box;background:#fff;page-break-after:always;';
 
-        // Header
-        doc.setFontSize(16);
-        doc.setFont('helvetica', 'bold');
-        doc.text('Exam Supervision Schedule', pageW / 2, margin + 5, { align: 'center' });
+        // Header / Decoration
+        const headerHtml = `
+          <div style="text-align:center;margin-bottom:20px;">
+            <div style="font-size:22px;font-weight:bold;color:#1e3a5f;border-bottom:3px double #1e3a5f;padding-bottom:8px;display:inline-block;">
+              جدول إشراف الامتحانات
+            </div>
+          </div>
+          <div style="display:flex;flex-wrap:wrap;justify-content:space-between;font-size:15px;margin-bottom:18px;padding:10px 16px;background:#f0f4f8;border-radius:8px;border:1px solid #d0d8e0;direction:rtl;">
+            <div style="font-weight:bold;"><span style="color:#555;">اليوم:</span> ${dayAr} (${weekAr})</div>
+            <div style="font-weight:bold;"><span style="color:#555;">الصف:</span> ${GRADE_AR[session.grade] || session.grade}</div>
+            <div style="font-weight:bold;"><span style="color:#555;">المادة:</span> ${session.subject || '—'}</div>
+            <div style="font-weight:bold;"><span style="color:#555;">التوقيت:</span> ${session.time}</div>
+          </div>
+        `;
 
-        doc.setFontSize(11);
-        doc.setFont('helvetica', 'normal');
-        doc.text(`Day: ${day}`, margin, margin + 18);
-        doc.text(`Grade: ${session.grade}`, margin + 80, margin + 18);
-        doc.text(`Time: ${session.time}`, margin, margin + 26);
-        doc.text(`Subject: ${session.subject || '-'}`, margin + 80, margin + 26);
-
-        // Line separator
-        doc.setDrawColor(100);
-        doc.line(margin, margin + 30, pageW - margin, margin + 30);
-
-        // Table data
-        const body = session.committees.map(c => [
-          `Room ${c.serial}`,
-          c.t1.name,
-          '',
-          c.t2.name,
-          ''
-        ]);
-
-        autoTable(doc, {
-          startY: margin + 35,
-          head: [['Room', 'Lead Supervisor', 'Signature', 'Associate Supervisor', 'Signature']],
-          body: body,
-          theme: 'grid',
-          styles: { fontSize: 10, cellPadding: 3, halign: 'center' },
-          headStyles: { fillColor: [30, 58, 95], textColor: 255, fontStyle: 'bold', halign: 'center' },
-          columnStyles: {
-            0: { cellWidth: 25 },
-            1: { cellWidth: 50, halign: 'left' },
-            2: { cellWidth: 35 },
-            3: { cellWidth: 50, halign: 'left' },
-            4: { cellWidth: 35 }
-          },
-          didDrawCell: (data) => {
-            // Draw signature box in signature columns (index 2 and 4)
-            if ((data.column.index === 2 || data.column.index === 4) && data.section === 'body') {
-              const x = data.cell.x + 2;
-              const y = data.cell.y + 2;
-              const w = data.cell.width - 4;
-              const h = data.cell.height - 4;
-              doc.setDrawColor(150);
-              doc.setLineWidth(0.3);
-              doc.rect(x, y, w, h);
-              // Small label under box
-              doc.setFontSize(7);
-              doc.setTextColor(150);
-              doc.text('Signature', data.cell.x + data.cell.width / 2, data.cell.y + data.cell.height - 1, { align: 'center' });
-              doc.setTextColor(0);
-            }
-          },
-          margin: { left: margin, right: margin }
+        // Build table rows — each supervisor gets one row
+        const allSupervisors: { serial: number; name: string }[] = [];
+        let serial = 1;
+        session.committees.forEach(c => {
+          allSupervisors.push({ serial: serial++, name: c.t1.name });
+          allSupervisors.push({ serial: serial++, name: c.t2.name });
         });
 
-        // Footer
-        const finalY = (doc as any).lastAutoTable?.finalY || margin + 35 + 20;
-        doc.setFontSize(8);
-        doc.setTextColor(150);
-        doc.text('Exam Supervisor System - Auto Generated', pageW / 2, pageH - 10, { align: 'center' });
+        const rowsHtml = allSupervisors.map(s => `
+          <tr>
+            <td style="border:1px solid #333;padding:8px 12px;text-align:center;width:100px;font-weight:bold;">${s.serial}</td>
+            <td style="border:1px solid #333;padding:8px 12px;text-align:center;width:440px;font-size:15px;">${s.name}</td>
+            <td style="border:1px solid #333;padding:8px 12px;text-align:center;width:160px;"></td>
+          </tr>
+        `).join('');
+
+        const tableHtml = `
+          <table style="width:100%;border-collapse:collapse;margin-top:10px;">
+            <thead>
+              <tr style="background:#1e3a5f;color:#fff;">
+                <th style="border:1px solid #333;padding:10px 12px;text-align:center;width:100px;font-size:15px;">الرقم التسلسلي</th>
+                <th style="border:1px solid #333;padding:10px 12px;text-align:center;width:440px;font-size:15px;">الاسم</th>
+                <th style="border:1px solid #333;padding:10px 12px;text-align:center;width:160px;font-size:15px;">الملاحظات</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${rowsHtml}
+            </tbody>
+          </table>
+        `;
+
+        pageDiv.innerHTML = headerHtml + tableHtml;
+        pages.push(pageDiv);
+        container.appendChild(pageDiv);
       }
 
-      // Add standby page for this day (after all grades)
-      const daySt = results.standbys?.[day];
-      const hasDayStandby = daySt && Object.values(daySt).some(s => s.length > 0);
+      // Standby page for this day
       if (hasDayStandby) {
-        if (!firstPage) doc.addPage();
-        firstPage = false;
+        const pageDiv = document.createElement('div');
+        pageDiv.style.cssText = 'width:794px;padding:40px 50px;box-sizing:border-box;background:#fff;page-break-after:always;';
 
-        doc.setFontSize(16);
-        doc.setFont('helvetica', 'bold');
-        doc.text('Standby Supervisors', pageW / 2, margin + 5, { align: 'center' });
-
-        doc.setFontSize(11);
-        doc.setFont('helvetica', 'normal');
-        doc.text(`Day: ${day}`, margin, margin + 18);
-
-        doc.setDrawColor(100);
-        doc.line(margin, margin + 22, pageW - margin, margin + 22);
-
-        const STAGE_PDF: Record<string, string> = { primary: 'Primary Stage', prep: 'Prep Stage', sec: 'Secondary Stage' };
-        const standbyBody: string[][] = [];
+        const stList: { stage: string; name: string }[] = [];
         for (const stage of ['primary', 'prep', 'sec']) {
-          const list = daySt[stage] || [];
-          if (list.length === 0) continue;
-          list.forEach((s, i) => {
-            standbyBody.push([i === 0 ? STAGE_PDF[stage] : '', s.name, '', '']);
-          });
+          const list = dayStandbys[stage] || [];
+          list.forEach(s => stList.push({ stage: STAGE_AR[stage], name: s.name }));
         }
 
-        autoTable(doc, {
-          startY: margin + 28,
-          head: [['Stage', 'Standby Supervisor', 'Signature', 'Notes']],
-          body: standbyBody,
-          theme: 'grid',
-          styles: { fontSize: 10, cellPadding: 3, halign: 'center' },
-          headStyles: { fillColor: [180, 120, 20], textColor: 255, fontStyle: 'bold', halign: 'center' },
-          columnStyles: {
-            0: { cellWidth: 40, halign: 'left' },
-            1: { cellWidth: 55, halign: 'left' },
-            2: { cellWidth: 35 },
-            3: { cellWidth: 40 },
-          },
-          didDrawCell: (data) => {
-            if (data.column.index === 2 && data.section === 'body') {
-              const x = data.cell.x + 2;
-              const y = data.cell.y + 2;
-              const w = data.cell.width - 4;
-              const h = data.cell.height - 4;
-              doc.setDrawColor(150);
-              doc.setLineWidth(0.3);
-              doc.rect(x, y, w, h);
-              doc.setFontSize(7);
-              doc.setTextColor(150);
-              doc.text('Signature', data.cell.x + data.cell.width / 2, data.cell.y + data.cell.height - 1, { align: 'center' });
-              doc.setTextColor(0);
-            }
-          },
-          margin: { left: margin, right: margin }
-        });
+        if (stList.length > 0) {
+          const headerHtml = `
+            <div style="text-align:center;margin-bottom:20px;">
+              <div style="font-size:22px;font-weight:bold;color:#b47814;border-bottom:3px double #b47814;padding-bottom:8px;display:inline-block;">
+                المدرسين المتاحين (احتياطي)
+              </div>
+            </div>
+            <div style="font-size:15px;margin-bottom:18px;padding:10px 16px;background:#fffbeb;border-radius:8px;border:1px solid #fde68a;direction:rtl;">
+              <span style="font-weight:bold;color:#555;">اليوم:</span> <strong>${dayAr} (${weekAr})</strong>
+            </div>
+          `;
 
-        doc.setFontSize(8);
-        doc.setTextColor(150);
-        doc.text('Exam Supervisor System - Auto Generated', pageW / 2, pageH - 10, { align: 'center' });
+          const rowsHtml = stList.map((s, i) => `
+            <tr>
+              <td style="border:1px solid #333;padding:8px 12px;text-align:center;width:100px;font-weight:bold;">${i + 1}</td>
+              <td style="border:1px solid #333;padding:8px 12px;text-align:center;width:350px;font-size:15px;">${s.name}</td>
+              <td style="border:1px solid #333;padding:8px 12px;text-align:center;width:200px;font-size:13px;color:#555;">${s.stage}</td>
+              <td style="border:1px solid #333;padding:8px 12px;text-align:center;width:100px;"></td>
+            </tr>
+          `).join('');
+
+          const tableHtml = `
+            <table style="width:100%;border-collapse:collapse;margin-top:10px;">
+              <thead>
+                <tr style="background:#b47814;color:#fff;">
+                  <th style="border:1px solid #333;padding:10px 12px;text-align:center;width:100px;font-size:15px;">الرقم التسلسلي</th>
+                  <th style="border:1px solid #333;padding:10px 12px;text-align:center;width:350px;font-size:15px;">الاسم</th>
+                  <th style="border:1px solid #333;padding:10px 12px;text-align:center;width:200px;font-size:15px;">المرحلة</th>
+                  <th style="border:1px solid #333;padding:10px 12px;text-align:center;width:100px;font-size:15px;">ملاحظات</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${rowsHtml}
+              </tbody>
+            </table>
+          `;
+
+          pageDiv.innerHTML = headerHtml + tableHtml;
+          pages.push(pageDiv);
+          container.appendChild(pageDiv);
+        }
       }
     }
 
-    if (firstPage) {
-      showToast('No results to export', 'error');
+    if (pages.length === 0) {
+      showToast('لا توجد نتائج للتصدير', 'error');
+      document.body.removeChild(container);
       return;
     }
 
-    doc.save('exam_supervision_schedule.pdf');
-    showToast('PDF downloaded!', 'success');
+    document.body.appendChild(container);
+
+    try {
+      for (let i = 0; i < pages.length; i++) {
+        const canvas = await html2canvas(pages[i], {
+          scale: 2,
+          useCORS: true,
+          backgroundColor: '#ffffff',
+          width: 794,
+          windowWidth: 794,
+        });
+        const imgData = canvas.toDataURL('image/png');
+        if (!firstPage) doc.addPage();
+        firstPage = false;
+        const imgW = pageW;
+        const imgH = (canvas.height * imgW) / canvas.width;
+        doc.addImage(imgData, 'PNG', 0, 0, imgW, Math.min(imgH, pageH));
+      }
+      doc.save('exam_supervision_schedule.pdf');
+      showToast('تم تحميل ملف الـ PDF بنجاح!', 'success');
+    } catch (err) {
+      console.error('PDF export error:', err);
+      showToast('حدث خطأ أثناء التصدير', 'error');
+    } finally {
+      document.body.removeChild(container);
+    }
   };
 
   // ========== RESET ALL ==========
@@ -1717,7 +1752,7 @@ export default function ExamSystem() {
     return (
       <div>
         <div style={{ marginBottom: 16, display: 'flex', gap: 10 }}>
-          <button className="btn btn-primary" onClick={exportPDF}>📄 Download PDF (A4 Printable)</button>
+          <button className="btn btn-primary" onClick={exportPDF}>📄 تحميل PDF (جداول الإشراف)</button>
         </div>
         {DAYS.map((day, idx) => {
           const sessions = results.assignments[day] || [];
