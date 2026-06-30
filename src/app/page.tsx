@@ -1736,17 +1736,17 @@ export default function ExamSystem() {
                         </div>
                       );
                     })}
+                    {/* Per-session standby inline */}
+                    {session.standbys && session.standbys.length > 0 && (
+                      <div style={{ marginTop: 8, background: 'rgba(245,158,11,0.06)', border: '1px solid rgba(245,158,11,0.2)', borderRadius: 8, padding: '8px 14px', display: 'flex', alignItems: 'center', gap: 10 }}>
+                        <span style={{ fontSize: 12, fontWeight: 700, color: '#f59e0b' }}>📍 Standby:</span>
+                        <span style={{ fontSize: 13, color: 'var(--text)' }}>
+                          {session.standbys.map((s, i) => <span key={s.id}>{i > 0 && ' , '}{s.name}</span>)}
+                        </span>
+                      </div>
+                    )}
                   </div>
                 ))}
-                {/* Per-session standby inline */}
-                {session.standbys && session.standbys.length > 0 && (
-                  <div style={{ marginTop: 8, background: 'rgba(245,158,11,0.06)', border: '1px solid rgba(245,158,11,0.2)', borderRadius: 8, padding: '8px 14px', display: 'flex', alignItems: 'center', gap: 10 }}>
-                    <span style={{ fontSize: 12, fontWeight: 700, color: '#f59e0b' }}>📍 Standby:</span>
-                    <span style={{ fontSize: 13, color: 'var(--text)' }}>
-                      {session.standbys.map((s, i) => <span key={s.id}>{i > 0 && ' , '}{s.name}</span>)}
-                    </span>
-                  </div>
-                )}
               </div>
             </div>
             </React.Fragment>
