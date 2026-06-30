@@ -1269,12 +1269,12 @@ export default function ExamSystem() {
 
         // Header / Decoration
         const headerHtml = `
-          <div style="text-align:center;margin-bottom:20px;">
-            <div style="font-size:22px;font-weight:bold;color:#1e3a5f;border-bottom:3px double #1e3a5f;padding-bottom:8px;display:inline-block;">
+          <div style="text-align:center;margin-bottom:16px;">
+            <div style="font-size:18px;font-weight:bold;color:#1e3a5f;border-bottom:3px double #1e3a5f;padding-bottom:6px;display:inline-block;">
               جدول إشراف الامتحانات
             </div>
           </div>
-          <div style="display:flex;flex-wrap:wrap;justify-content:space-between;font-size:15px;margin-bottom:18px;padding:10px 16px;background:#f0f4f8;border-radius:8px;border:1px solid #d0d8e0;direction:rtl;">
+          <div style="display:flex;flex-wrap:wrap;justify-content:space-between;font-size:13px;margin-bottom:14px;padding:8px 14px;background:#f0f4f8;border-radius:8px;border:1px solid #d0d8e0;direction:rtl;">
             <div style="font-weight:bold;"><span style="color:#555;">اليوم:</span> ${dayAr} (${weekAr})</div>
             <div style="font-weight:bold;"><span style="color:#555;">الصف:</span> ${GRADE_AR[session.grade] || session.grade}</div>
             <div style="font-weight:bold;"><span style="color:#555;">المادة:</span> ${session.subject || '—'}</div>
@@ -1282,14 +1282,16 @@ export default function ExamSystem() {
           </div>
         `;
 
-        // Table: each row = one committee, split into 2 supervisors + signatures
+        // Table: each committee = 2 rows (names stacked vertically)
         const rowsHtml = session.committees.map(c => `
           <tr>
-            <td style="border:1px solid #333;padding:10px 8px;text-align:center;width:55px;font-weight:bold;font-size:14px;">${c.serial}</td>
-            <td style="border:1px solid #333;padding:10px 12px;text-align:center;width:230px;font-size:15px;">${c.t1.name}</td>
-            <td style="border:1px solid #333;padding:10px 8px;text-align:center;width:80px;"></td>
-            <td style="border:1px solid #333;padding:10px 12px;text-align:center;width:230px;font-size:15px;">${c.t2.name}</td>
-            <td style="border:1px solid #333;padding:10px 8px;text-align:center;width:80px;"></td>
+            <td rowspan="2" style="border:1px solid #333;padding:8px;text-align:center;width:50px;font-weight:bold;font-size:13px;vertical-align:middle;">${c.serial}</td>
+            <td style="border:1px solid #333;padding:7px 10px;text-align:center;width:420px;font-size:13px;font-family:'Segoe UI',Tahoma,'Noto Sans Arabic',sans-serif;letter-spacing:0.3px;">${c.t1.name}</td>
+            <td style="border:1px solid #333;padding:7px 8px;text-align:center;width:110px;"></td>
+          </tr>
+          <tr>
+            <td style="border:1px solid #333;padding:7px 10px;text-align:center;width:420px;font-size:13px;font-family:'Segoe UI',Tahoma,'Noto Sans Arabic',sans-serif;letter-spacing:0.3px;">${c.t2.name}</td>
+            <td style="border:1px solid #333;padding:7px 8px;text-align:center;width:110px;"></td>
           </tr>
         `).join('');
 
@@ -1297,11 +1299,9 @@ export default function ExamSystem() {
           <table style="width:100%;border-collapse:collapse;margin-top:10px;">
             <thead>
               <tr style="background:#1e3a5f;color:#fff;">
-                <th style="border:1px solid #333;padding:10px 8px;text-align:center;width:55px;font-size:14px;">م</th>
-                <th style="border:1px solid #333;padding:10px 12px;text-align:center;width:230px;font-size:14px;">اسم المراقب</th>
-                <th style="border:1px solid #333;padding:10px 8px;text-align:center;width:80px;font-size:14px;">التوقيع</th>
-                <th style="border:1px solid #333;padding:10px 12px;text-align:center;width:230px;font-size:14px;">اسم المراقب</th>
-                <th style="border:1px solid #333;padding:10px 8px;text-align:center;width:80px;font-size:14px;">التوقيع</th>
+                <th style="border:1px solid #333;padding:9px 8px;text-align:center;width:50px;font-size:13px;">م</th>
+                <th style="border:1px solid #333;padding:9px 10px;text-align:center;width:420px;font-size:13px;">الاسم</th>
+                <th style="border:1px solid #333;padding:9px 8px;text-align:center;width:110px;font-size:13px;">التوقيع</th>
               </tr>
             </thead>
             <tbody>
@@ -1309,7 +1309,6 @@ export default function ExamSystem() {
             </tbody>
           </table>
         `;
-
         pageDiv.innerHTML = headerHtml + tableHtml;
         pages.push(pageDiv);
         container.appendChild(pageDiv);
@@ -1340,11 +1339,10 @@ export default function ExamSystem() {
 
           const rowsHtml = stList.map((s, i) => `
             <tr>
-              <td style="border:1px solid #333;padding:8px 12px;text-align:center;width:55px;font-weight:bold;font-size:14px;">${i + 1}</td>
-              <td style="border:1px solid #333;padding:8px 12px;text-align:center;width:260px;font-size:15px;">${s.name}</td>
-              <td style="border:1px solid #333;padding:8px 12px;text-align:center;width:80px;"></td>
-              <td style="border:1px solid #333;padding:8px 12px;text-align:center;width:220px;font-size:13px;color:#555;">${s.stage}</td>
-              <td style="border:1px solid #333;padding:8px 12px;text-align:center;width:80px;"></td>
+              <td style="border:1px solid #333;padding:7px 8px;text-align:center;width:50px;font-weight:bold;font-size:13px;">${i + 1}</td>
+              <td style="border:1px solid #333;padding:7px 10px;text-align:center;width:350px;font-size:13px;font-family:'Segoe UI',Tahoma,'Noto Sans Arabic',sans-serif;letter-spacing:0.3px;">${s.name}</td>
+              <td style="border:1px solid #333;padding:7px 8px;text-align:center;width:80px;"></td>
+              <td style="border:1px solid #333;padding:7px 10px;text-align:center;width:150px;font-size:12px;color:#555;">${s.stage}</td>
             </tr>
           `).join('');
 
@@ -1352,11 +1350,10 @@ export default function ExamSystem() {
             <table style="width:100%;border-collapse:collapse;margin-top:10px;">
               <thead>
                 <tr style="background:#b47814;color:#fff;">
-                  <th style="border:1px solid #333;padding:10px 8px;text-align:center;width:55px;font-size:14px;">م</th>
-                  <th style="border:1px solid #333;padding:10px 12px;text-align:center;width:260px;font-size:14px;">اسم المراقب</th>
-                  <th style="border:1px solid #333;padding:10px 8px;text-align:center;width:80px;font-size:14px;">التوقيع</th>
-                  <th style="border:1px solid #333;padding:10px 12px;text-align:center;width:220px;font-size:14px;">المرحلة</th>
-                  <th style="border:1px solid #333;padding:10px 8px;text-align:center;width:80px;font-size:14px;">التوقيع</th>
+                  <th style="border:1px solid #333;padding:9px 8px;text-align:center;width:50px;font-size:13px;">م</th>
+                  <th style="border:1px solid #333;padding:9px 10px;text-align:center;width:350px;font-size:13px;">الاسم</th>
+                  <th style="border:1px solid #333;padding:9px 8px;text-align:center;width:80px;font-size:13px;">التوقيع</th>
+                  <th style="border:1px solid #333;padding:9px 10px;text-align:center;width:150px;font-size:13px;">المرحلة</th>
                 </tr>
               </thead>
               <tbody>
