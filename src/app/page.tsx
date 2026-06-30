@@ -29,7 +29,7 @@ interface Teacher { id: string; name: string; subject: string; notes: string; }
 interface ScheduleCell { id?: string; grade: string; day: string; committees: number; subject: string; time: string; }
 interface TrackingEntry { totalComm: number; totalHours: number; dayComm: Record<string,number>; assignedSlots: {day:string;start:number;end:number}[]; gradeHistory: {dayIndex:number;grade:string}[]; }
 interface CommitteeResult { serial: number; t1: {id:string|null;name:string}; t2: {id:string|null;name:string}; }
-interface SessionResult { grade: string; time: string; subject: string; committees: CommitteeResult[]; }
+interface SessionResult { grade: string; time: string; subject: string; committees: CommitteeResult[]; standbys: StandbyEntry[]; }
 interface StandbyEntry { id: string; name: string; }
 interface DistributionResults {
   _version: number;
@@ -238,7 +238,7 @@ export default function ExamSystem() {
         if (data && data.data) {
           const d = data.data;
           // v6+ results must have _version >= 6. Old results → discard.
-          if (!d._version || d._version < 10) {
+          if (!d._version || d._version < 11) {
             await fetch('/api/results', { method: 'DELETE' });
             setResults(null);
           } else {
@@ -580,7 +580,7 @@ export default function ExamSystem() {
         if (cell && cell.committees > 0) {
           const existing = finalAssignments[day].find(s => s.grade === grade && s.time === (cell.time || DEFAULT_TIMES[grade]));
           if (!existing) {
-            finalAssignments[day].push({ grade, time: cell.time || DEFAULT_TIMES[grade] || '', subject: cell.subject || '', committees: [] });
+            finalAssignments[day].push({ grade, time: cell.time || DEFAULT_TIMES[grade] || '', subject: cell.subject || '', committees: [], standbys: [] });
           }
         }
       });
@@ -994,22 +994,19 @@ export default function ExamSystem() {
       }
     }
 
-    // ---- Post-distribution: STANDBY ASSIGNMENT ----
-    // 1 standby teacher per stage per day from unassigned teachers
-    // CRITICAL: Standby must NOT be the same subject as any exam that day for that stage
-    // Rotation: prefer teachers who weren't standby yesterday, fewest total standby days
-    const STAGES_LIST = ['primary', 'prep', 'sec'] as const;
-    const STANDBY_PER_STAGE = 1;
-    const standbys: Record<string, Record<string, StandbyEntry[]>> = {};
-    DAYS.forEach(d => { standbys[d] = {}; STAGES_LIST.forEach(s => { standbys[d][s] = []; }); });
+    // ---- Post-distribution: STANDBY ASSIGNMENT (per-session) ----
+    // Each grade session gets its own 1-2 standby supervisors
+    // Standby must NOT have a time-overlapping assignment, and subject exclusion rules apply
+    // Rotation: prefer teachers who weren't standby recently, fewest total standby count
+    const standbys: Record<string, Record<string, StandbyEntry[]>> = {}; // backward compat (empty)
 
     // Track standby count per teacher for rotation fairness
     const teacherStandbyCount: Record<string, number> = {};
     teachers.forEach(t => { teacherStandbyCount[t.id] = 0; });
 
-    // Track which teachers are already standby for another stage today
-    const todayStandby: Record<string, Set<string>> = {};
-    DAYS.forEach(d => { todayStandby[d] = new Set(); });
+    // Track which teachers are already standby at a given time on a given day
+    // Key: "day__start__end" → Set of teacher IDs
+    const todayStandbyByTime: Record<string, Set<string>> = {};
 
     for (let di = 0; di < DAYS.length; di++) {
       const day = DAYS[di];
@@ -1018,51 +1015,76 @@ export default function ExamSystem() {
       const isW2Peak = WEEK2_DAYS.includes(day) && peakW2Days.has(day);
       const dayStandbyPool = (includeAdminW2 && isW2Peak) ? [...teachers] : nonAdminTeachers;
 
-      for (const stage of STAGES_LIST) {
-        // Only assign standby if there are exams for this stage on this day
-        const stageSessions = (finalAssignments[day] || []).filter(s => getStage(s.grade) === stage);
-        if (stageSessions.length === 0) continue;
+      const daySessions = finalAssignments[day] || [];
 
-        // Collect subjects being examined today for this stage
-        const dayStageSubjects = new Set<string>();
-        stageSessions.forEach(s => { if (s.subject) dayStageSubjects.add(s.subject); });
+      for (const session of daySessions) {
+        if (session.committees.length === 0) continue;
 
-        // Find teachers NOT assigned on this day who can supervise this stage
-        // AND whose subject doesn't match any exam subject for this stage today
+        const sessTimeInfo = parseTimeRange(session.time);
+        const stage = getStage(session.grade);
+        const timeKey = `${day}__${sessTimeInfo.start}__${sessTimeInfo.end}`;
+
+        // Initialize time-key tracking set
+        if (!todayStandbyByTime[timeKey]) todayStandbyByTime[timeKey] = new Set();
+
+        // Find candidates who:
+        // 1. can supervise this stage
+        // 2. do NOT have a time-overlapping assignment on this day
+        // 3. subject doesn't match session.subject (if ruleSubject)
+        // 4. not already standby for another session at same time on same day
+        // 5. special subject exclusion still applies
         let candidates = dayStandbyPool.filter(t => {
-          if ((tracking[t.id].dayComm[day] || 0) >= 2) return false;
-          if (todayStandby[day].has(t.id)) return false; // already standby for another stage today
+          // Stage compatibility
           if (!canSuperviseStage(t, stage)) return false;
-          // CRITICAL: Don't pick a teacher whose subject is being examined today
-          if (ruleSubject && t.subject && dayStageSubjects.has(t.subject)) return false;
-          // CRITICAL: Special subject exclusion (Religion/Arabic) for standby
-          if (ruleSubject && dayStageSubjects.has('الدين') && (t.subject === 'الدين' || t.subject === 'العربي')) return false;
-          if (ruleSubject && dayStageSubjects.has('العربي') && t.subject === 'الدين' && stage === 'primary') return false;
+
+          // No time-overlapping assignment on this day
+          const tr = tracking[t.id];
+          if (tr.assignedSlots.some(s => s.day === day && !(sessTimeInfo.end <= s.start || sessTimeInfo.start >= s.end))) return false;
+
+          // Own-subject exclusion
+          if (ruleSubject && session.subject && t.subject === session.subject) return false;
+
+          // Special subject exclusion (Religion/Arabic)
+          if (ruleSubject && session.subject === 'الدين' && (t.subject === 'الدين' || t.subject === 'العربي')) return false;
+          if (ruleSubject && session.subject === 'العربي' && t.subject === 'الدين' && stage === 'primary') return false;
+
+          // Not already standby at this same time on this day
+          if (todayStandbyByTime[timeKey].has(t.id)) return false;
+
           return true;
         });
 
-        // Rotation: deprioritize teachers who were standby YESTERDAY for ANY stage
+        // Rotation: deprioritize teachers who were standby YESTERDAY for ANY session
         const yesterdayStandby = new Set<string>();
         if (di > 0) {
           const prevDay = DAYS[di - 1];
-          for (const st of STAGES_LIST) {
-            (standbys[prevDay][st] || []).forEach(s => yesterdayStandby.add(s.id));
+          for (const prevSess of (finalAssignments[prevDay] || [])) {
+            prevSess.standbys.forEach(s => yesterdayStandby.add(s.id));
           }
         }
+
+        // Check if teacher is completely free today (no assignments at all on this day)
+        const isCompletelyFreeToday = (t: Teacher): boolean => {
+          const tr = tracking[t.id];
+          return !tr.assignedSlots.some(s => s.day === day);
+        };
+
         candidates.sort((a, b) => {
           const aWasYesterday = yesterdayStandby.has(a.id) ? 100 : 0;
           const bWasYesterday = yesterdayStandby.has(b.id) ? 100 : 0;
-          return (teacherStandbyCount[a.id] + aWasYesterday) - (teacherStandbyCount[b.id] + bWasYesterday);
+          const aFree = isCompletelyFreeToday(a) ? 0 : 10;
+          const bFree = isCompletelyFreeToday(b) ? 0 : 10;
+          return (teacherStandbyCount[a.id] + aWasYesterday + aFree) - (teacherStandbyCount[b.id] + bWasYesterday + bFree);
         });
 
-        // Pick up to STANDBY_PER_STAGE
-        const picked = candidates.slice(0, STANDBY_PER_STAGE);
-        standbys[day][stage] = picked.map(t => ({ id: t.id, name: t.name }));
+        // Pick min(2, candidates.length) teachers
+        const picked = candidates.slice(0, Math.min(2, candidates.length));
+        session.standbys = picked.map(t => ({ id: t.id, name: t.name }));
 
-        // Track rotation count and mark as standby for today (so same teacher isn't picked for another stage)
+        // Track rotation count and mark as standby at this time slot
         for (const s of picked) {
           teacherStandbyCount[s.id]++;
-          todayStandby[day].add(s.id);
+          todayStandbyByTime[timeKey].add(s.id);
         }
       }
     }
@@ -1171,19 +1193,19 @@ export default function ExamSystem() {
     const allH = teachers.map(t => tracking[t.id]?.totalHours || 0);
     const avgAll = allH.length ? allH.reduce((a, b) => a + b, 0) / allH.length : 0;
     const spread = allH.length ? Math.sqrt(allH.reduce((s, h) => s + (h - avgAll) ** 2, 0) / allH.length) : 0;
-    let msg = `v10 | Avg: ${avgAll.toFixed(1)}h | Spread: ${spread.toFixed(1)} | Min: ${allH.length ? Math.min(...allH).toFixed(1) : 0}h | Max: ${allH.length ? Math.max(...allH).toFixed(1) : 0}h`;
-    // Count total standby assigned
-    const totalStandby = Object.values(standbys).reduce((a, daySt) => a + Object.values(daySt).reduce((b, stList) => b + stList.length, 0), 0);
-    if (totalStandby > 0) msg += ` | ${totalStandby} standby (${STANDBY_PER_STAGE}/stage/day)`;
+    let msg = `v11 | Avg: ${avgAll.toFixed(1)}h | Spread: ${spread.toFixed(1)} | Min: ${allH.length ? Math.min(...allH).toFixed(1) : 0}h | Max: ${allH.length ? Math.max(...allH).toFixed(1) : 0}h`;
+    // Count total standby assigned (from per-session standbys)
+    const totalStandby = Object.values(finalAssignments).flat().reduce((a, s) => a + s.standbys.length, 0);
+    if (totalStandby > 0) msg += ` | ${totalStandby} standby (per-session)`;
     if (standbyCount > 0) msg += ` | ${standbyCount} unfilled`;
     if (violations.length > 0) {
       msg += ` | ${violations.length} violations (check console)`;
-      console.warn('[Distribution v10] Violations:', violations);
+      console.warn('[Distribution v11] Violations:', violations);
     } else {
-      console.log('[Distribution v10] All constraints passed!');
+      console.log('[Distribution v11] All constraints passed!');
     }
 
-    const newResults: DistributionResults = { _version: 10, assignments: finalAssignments, standbys, tracking };
+    const newResults: DistributionResults = { _version: 11, assignments: finalAssignments, standbys, tracking };
     setResults(newResults);
     fetch('/api/results', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: newResults }) });
     showToast(msg, standbyCount > 0 || violations.length > 0 ? 'error' : 'success');
@@ -1201,15 +1223,13 @@ export default function ExamSystem() {
         s.committees.forEach(c => {
           csv += `"${displayDay}","${s.grade}","${s.time}","${s.subject || ''}","Room ${c.serial}","${c.t1.name}","${c.t2.name}","Primary"\n`;
         });
-      });
-      if (results.standbys?.[day]) {
-        const STAGE_CSV: Record<string, string> = { primary: 'Primary', prep: 'Prep', sec: 'Secondary' };
-        for (const stage of ['primary', 'prep', 'sec']) {
-          for (const s of (results.standbys[day][stage] || [])) {
-            csv += `"${displayDay}","${STAGE_CSV[stage]}","","","Standby","${s.name}","","Standby"\n`;
+        // Per-session standby rows
+        if (s.standbys && s.standbys.length > 0) {
+          for (const st of s.standbys) {
+            csv += `"${displayDay}","${s.grade}","${s.time}","${s.subject || ''}","Standby","${st.name}","","Standby"\n`;
           }
         }
-      }
+      });
     });
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
@@ -1236,45 +1256,37 @@ export default function ExamSystem() {
       'Grade 1 Prep': '\u0627\u0644\u0635\u0641 \u0627\u0644\u0623\u0648\u0644 \u0627\u0644\u0625\u0639\u062f\u0627\u062f\u064a', 'Grade 2 Prep': '\u0627\u0644\u0635\u0641 \u0627\u0644\u062b\u0627\u0646\u064a \u0627\u0644\u0625\u0639\u062f\u0627\u062f\u064a',
       'Grade 1 Secondary': '\u0627\u0644\u0635\u0641 \u0627\u0644\u0623\u0648\u0644 \u0627\u0644\u062b\u0627\u0646\u0648\u064a', 'Grade 2 Secondary': '\u0627\u0644\u0635\u0641 \u0627\u0644\u062b\u0627\u0646\u064a \u0627\u0644\u062b\u0627\u0646\u0648\u064a',
     };
-    const STAGE_AR: Record<string, string> = {
-      primary: '\u0627\u0644\u0645\u0631\u062d\u0644\u0629 \u0627\u0644\u0627\u0628\u062a\u062f\u0627\u0626\u064a\u0629', prep: '\u0627\u0644\u0645\u0631\u062d\u0644\u0629 \u0627\u0644\u0625\u0639\u062f\u0627\u062f\u064a\u0629', sec: '\u0627\u0644\u0645\u0631\u062d\u0644\u0629 \u0627\u0644\u062b\u0627\u0646\u0648\u064a\u0629',
-    };
-
     let htmlPages = '';
     for (const day of DAYS) {
       const sessions = results.assignments[day] || [];
-      const dayStandbys = results.standbys?.[day];
-      const hasDayStandby = dayStandbys && Object.values(dayStandbys).some(s => s.length > 0);
-      if (sessions.length === 0 && !hasDayStandby) continue;
+      if (sessions.length === 0) continue;
       const weekKey = day.startsWith('W1') ? 'W1' : 'W2';
       const dayAr = DAY_AR[day] || day;
       const weekAr = WEEK_AR[weekKey] || '';
       for (const session of sessions) {
-        if (session.committees.length === 0) continue;
+        if (session.committees.length === 0 && (!session.standbys || session.standbys.length === 0)) continue;
         const rowsHtml = session.committees.map((c: any) =>
           '<tr><td rowspan="2" class="num-cell">' + c.serial + '</td><td class="name-cell">' + c.t1.name + '</td><td class="sig-cell"></td><td class="notes-cell"></td></tr>' +
           '<tr class="row2"><td class="name-cell">' + c.t2.name + '</td><td class="sig-cell"></td><td class="notes-cell"></td></tr>'
         ).join('');
-        htmlPages += '<div class="page"><div class="header-title">\u062c\u062f\u0648\u0644 \u0625\u0634\u0631\u0627\u0641 \u0627\u0644\u0627\u0645\u062a\u062d\u0627\u0646\u0627\u062a</div>' +
+        let pageHtml = '<div class="page"><div class="header-title">\u062c\u062f\u0648\u0644 \u0625\u0634\u0631\u0627\u0641 \u0627\u0644\u0627\u0645\u062a\u062d\u0627\u0646\u0627\u062a</div>' +
           '<div class="header-info"><div><span class="label">\u0627\u0644\u064a\u0648\u0645:</span> ' + dayAr + ' (' + weekAr + ')</div>' +
           '<div><span class="label">\u0627\u0644\u0635\u0641:</span> ' + (GRADE_AR[session.grade] || session.grade) + '</div>' +
           '<div><span class="label">\u0627\u0644\u0645\u0627\u062f\u0629:</span> ' + (session.subject || '\u2014') + '</div>' +
           '<div><span class="label">\u0627\u0644\u062a\u0648\u0642\u064a\u062a:</span> ' + session.time + '</div></div>' +
           '<table><thead><tr><th class="th-num">\u0645</th><th class="th-name">\u0627\u0644\u0627\u0633\u0645</th><th class="th-sig">\u0627\u0644\u062a\u0648\u0642\u064a\u0639</th><th class="th-notes">\u0627\u0644\u0645\u0644\u0627\u062d\u0638\u0627\u062a</th></tr></thead>' +
-          '<tbody>' + rowsHtml + '</tbody></table></div>';
-      }
-      if (hasDayStandby) {
-        const stList: { stage: string; name: string }[] = [];
-        for (const stage of ['primary', 'prep', 'sec']) {
-          (dayStandbys[stage] || []).forEach((s: any) => stList.push({ stage: STAGE_AR[stage], name: s.name }));
-        }
-        if (stList.length > 0) {
-          const stRows = stList.map((s, i) => '<tr><td class="num-cell">' + (i+1) + '</td><td class="name-cell">' + s.name + '</td><td class="sig-cell"></td><td class="notes-cell"></td><td class="stage-cell">' + s.stage + '</td></tr>').join('');
-          htmlPages += '<div class="page"><div class="header-title standby">\u0627\u0644\u0645\u062f\u0631\u0633\u064a\u0646 \u0627\u0644\u0645\u062a\u0627\u062d\u064a\u0646 (\u0627\u062d\u062a\u064a\u0627\u0637\u064a)</div>' +
-            '<div class="header-info standby"><span class="label">\u0627\u0644\u064a\u0648\u0645:</span> <strong>' + dayAr + ' (' + weekAr + ')</strong></div>' +
-            '<table><thead><tr class="standby-hdr"><th class="th-num">\u0645</th><th class="th-name">\u0627\u0644\u0627\u0633\u0645</th><th class="th-sig">\u0627\u0644\u062a\u0648\u0642\u064a\u0639</th><th class="th-notes">\u0627\u0644\u0645\u0644\u0627\u062d\u0638\u0627\u062a</th><th class="th-stage">\u0627\u0644\u0645\u0631\u062d\u0644\u0629</th></tr></thead>' +
+          '<tbody>' + rowsHtml + '</tbody></table>';
+        // Per-session standby section
+        if (session.standbys && session.standbys.length > 0) {
+          const stRows = session.standbys.map((s: any, i: number) =>
+            '<tr><td class="num-cell">' + (i+1) + '</td><td class="name-cell">' + s.name + '</td><td class="sig-cell"></td><td class="notes-cell"></td></tr>'
+          ).join('');
+          pageHtml += '<div class="standby-section"><div class="standby-title">\u0627\u0644\u0627\u062d\u062a\u064a\u0627\u0637\u064a</div>' +
+            '<table class="standby-table"><thead><tr><th class="th-num">\u0645</th><th class="th-name">\u0627\u0644\u0627\u0633\u0645</th><th class="th-sig">\u0627\u0644\u062a\u0648\u0642\u064a\u0639</th><th class="th-notes">\u0627\u0644\u0645\u0644\u0627\u062d\u0638\u0627\u062a</th></tr></thead>' +
             '<tbody>' + stRows + '</tbody></table></div>';
         }
+        pageHtml += '</div>';
+        htmlPages += pageHtml;
       }
     }
     if (!htmlPages) { showToast('No results to export', 'error'); return; }
@@ -1283,18 +1295,21 @@ export default function ExamSystem() {
       'body{font-family:Arial,Helvetica,sans-serif;color:#000;background:#fff}' +
       '.page{width:794px;min-height:1123px;padding:50px 40px;background:#fff}' +
       '.header-title{text-align:center;font-size:22px;font-weight:bold;color:#1e3a5f;border-bottom:3px double #1e3a5f;padding-bottom:8px;margin-bottom:16px;width:100%}' +
-      '.header-title.standby{color:#b47814;border-bottom-color:#b47814}' +
       '.header-info{display:flex;flex-wrap:wrap;justify-content:space-between;font-size:13px;margin-bottom:16px;padding:10px 14px;background:#f0f4f8;border-radius:6px;border:1px solid #d0d8e0;font-weight:bold}' +
-      '.header-info.standby{background:#fffbeb;border-color:#fde68a}.header-info .label{color:#555}' +
+      '.header-info .label{color:#555}' +
       'table{width:100%;border-collapse:collapse;margin-top:10px}' +
-      'thead tr{background:#1e3a5f;color:#fff}thead tr.standby-hdr{background:#b47814}' +
+      'thead tr{background:#1e3a5f;color:#fff}' +
       'th{border:1px solid #333;padding:8px 6px;text-align:center;font-size:13px}' +
-      '.th-num{width:40px}.th-name{width:auto}.th-sig{width:90px}.th-notes{width:130px}.th-stage{width:130px}' +
+      '.th-num{width:40px}.th-name{width:auto}.th-sig{width:90px}.th-notes{width:130px}' +
       'td{border:1px solid #333;padding:8px 10px;text-align:center;font-size:14px;color:#000}' +
       '.num-cell{font-size:14px;vertical-align:middle;width:40px;color:#000}' +
       '.name-cell{font-weight:bold;font-size:14px;color:#000;text-align:center}' +
-      '.sig-cell{width:90px}.notes-cell{width:130px}.stage-cell{font-size:12px;color:#555}' +
-      'tr.row2 td{border-top:none}';
+      '.sig-cell{width:90px}.notes-cell{width:130px}' +
+      'tr.row2 td{border-top:none}' +
+      '.standby-section{margin-top:20px;border:2px solid #f59e0b;border-radius:6px;padding:12px 16px;background:#fffbeb}' +
+      '.standby-title{font-size:15px;font-weight:bold;color:#b47814;margin-bottom:10px;text-align:center}' +
+      '.standby-table{font-size:12px}.standby-table th{background:#b47814;color:#fff;font-size:12px;padding:6px 4px}' +
+      '.standby-table td{font-size:13px;padding:6px 8px}';
 
     const container = document.createElement('div');
     container.style.cssText = 'position:fixed;top:-9999px;left:0;width:794px;z-index:-1;background:#fff;';
@@ -1664,9 +1679,6 @@ export default function ExamSystem() {
   const renderResultsPage = () => {
     if (!results?.assignments) return <div className="card"><div className="empty-state"><p>Execute the distribution engine to view results</p></div></div>;
 
-    const STAGE_LABELS: Record<string, string> = { primary: 'Primary', prep: 'Prep', sec: 'Secondary' };
-    const STAGE_COLORS: Record<string, string> = { primary: '#f59e0b', prep: '#8b5cf6', sec: '#06b6d4' };
-
     return (
       <div>
         <div style={{ marginBottom: 16, display: 'flex', gap: 10 }}>
@@ -1674,9 +1686,8 @@ export default function ExamSystem() {
         </div>
         {DAYS.map((day, idx) => {
           const sessions = results.assignments[day] || [];
-          const dayStandbys = results.standbys?.[day];
-          const hasStandby = dayStandbys && Object.values(dayStandbys).some(s => s.length > 0);
-          if (sessions.length === 0 && !hasStandby) return null;
+          const hasAnyContent = sessions.some(s => s.committees.length > 0);
+          if (!hasAnyContent) return null;
           const displayDay = day.replace('W1-','Week 1 - ').replace('W2-','Week 2 - ');
           // Week separator before first W2 day
           const weekSep = idx === WEEK1_DAYS.length ? (
@@ -1727,22 +1738,13 @@ export default function ExamSystem() {
                     })}
                   </div>
                 ))}
-                {/* Standby section */}
-                {hasStandby && (
-                  <div style={{ marginTop: 12, background: 'rgba(245,158,11,0.06)', border: '1px solid rgba(245,158,11,0.2)', borderRadius: 10, padding: '12px 16px' }}>
-                    <div style={{ fontSize: 13, fontWeight: 700, color: '#f59e0b', marginBottom: 8 }}>📍 Available Teachers (Standby)</div>
-                    {['primary', 'prep', 'sec'].map(stage => {
-                      const stList = dayStandbys?.[stage] || [];
-                      if (stList.length === 0) return null;
-                      return (
-                        <div key={stage} style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
-                          <span style={{ fontSize: 12, fontWeight: 700, color: STAGE_COLORS[stage], background: `${STAGE_COLORS[stage]}18`, padding: '2px 10px', borderRadius: 6 }}>{STAGE_LABELS[stage]}</span>
-                          <span style={{ fontSize: 13, color: 'var(--text)' }}>
-                            {stList.map((s, i) => <span key={s.id}>{i > 0 && ' , '}{s.name}</span>)}
-                          </span>
-                        </div>
-                      );
-                    })}
+                {/* Per-session standby inline */}
+                {session.standbys && session.standbys.length > 0 && (
+                  <div style={{ marginTop: 8, background: 'rgba(245,158,11,0.06)', border: '1px solid rgba(245,158,11,0.2)', borderRadius: 8, padding: '8px 14px', display: 'flex', alignItems: 'center', gap: 10 }}>
+                    <span style={{ fontSize: 12, fontWeight: 700, color: '#f59e0b' }}>📍 Standby:</span>
+                    <span style={{ fontSize: 13, color: 'var(--text)' }}>
+                      {session.standbys.map((s, i) => <span key={s.id}>{i > 0 && ' , '}{s.name}</span>)}
+                    </span>
                   </div>
                 )}
               </div>
@@ -2082,7 +2084,7 @@ export default function ExamSystem() {
   };
 
   // ========== MAIN APP RENDER ==========
-  const hasResults = !!(results?.assignments && results?.standbys && results?.tracking);
+  const hasResults = !!(results?.assignments && results?.tracking);
   const pages: { key: Page; label: string; adminOnly: boolean; requiresResults?: boolean }[] = [
     { key: 'teachers', label: '👨‍🏫 Teachers', adminOnly: false },
     { key: 'schedule', label: '📅 Schedule', adminOnly: false },
@@ -2105,7 +2107,7 @@ export default function ExamSystem() {
       <header>
         <div className="logo">
           <div className="logo-dot" />
-          EXAM · SUPERVISOR · EQUALIZER · v10
+          EXAM · SUPERVISOR · EQUALIZER · v11
         </div>
         <div className="header-actions">
           <span className="badge" style={{ background: `${roleColor}22`, color: roleColor }}>{roleLabel}</span>
