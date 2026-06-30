@@ -4,8 +4,6 @@ export const dynamic = 'force-dynamic';
 
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { createClient, RealtimeChannel } from '@supabase/supabase-js';
-import jsPDF from 'jspdf';
-import html2canvas from 'html2canvas';
 
 // ========== CONSTANTS ==========
 const WEEK1_DAYS = ['W1-Saturday','W1-Sunday','W1-Monday','W1-Tuesday','W1-Wednesday','W1-Thursday'];
@@ -1219,190 +1217,90 @@ export default function ExamSystem() {
   };
 
   // ========== EXPORT PDF (Arabic table, A4 per grade per day) ==========
-  const exportPDF = async () => {
+  // ========== EXPORT PDF (Arabic table via print) ==========
+  const exportPDF = () => {
     if (!results?.assignments) return;
 
     const DAY_AR: Record<string, string> = {
-      'W1-Saturday': 'السبت', 'W1-Sunday': 'الأحد', 'W1-Monday': 'الاثنين',
-      'W1-Tuesday': 'الثلاثاء', 'W1-Wednesday': 'الأربعاء', 'W1-Thursday': 'الخميس',
-      'W2-Saturday': 'السبت', 'W2-Sunday': 'الأحد', 'W2-Monday': 'الاثنين',
-      'W2-Tuesday': 'الثلاثاء', 'W2-Wednesday': 'الأربعاء', 'W2-Thursday': 'الخميس',
+      'W1-Saturday': '\u0627\u0644\u0633\u0628\u062a', 'W1-Sunday': '\u0627\u0644\u0623\u062d\u062f', 'W1-Monday': '\u0627\u0644\u0627\u062b\u0646\u064a\u0646',
+      'W1-Tuesday': '\u0627\u0644\u062b\u0644\u0627\u062b\u0627\u0621', 'W1-Wednesday': '\u0627\u0644\u0623\u0631\u0628\u0639\u0627\u0621', 'W1-Thursday': '\u0627\u0644\u062e\u0645\u064a\u0633',
+      'W2-Saturday': '\u0627\u0644\u0633\u0628\u062a', 'W2-Sunday': '\u0627\u0644\u0623\u062d\u062f', 'W2-Monday': '\u0627\u0644\u0627\u062b\u0646\u064a\u0646',
+      'W2-Tuesday': '\u0627\u0644\u062b\u0644\u0627\u062b\u0627\u0621', 'W2-Wednesday': '\u0627\u0644\u0623\u0631\u0628\u0639\u0627\u0621', 'W2-Thursday': '\u0627\u0644\u062e\u0645\u064a\u0633',
     };
-    const WEEK_AR: Record<string, string> = { 'W1': 'الأسبوع الأول', 'W2': 'الأسبوع الثاني' };
+    const WEEK_AR: Record<string, string> = { 'W1': '\u0627\u0644\u0623\u0633\u0628\u0648\u0639 \u0627\u0644\u0623\u0648\u0644', 'W2': '\u0627\u0644\u0623\u0633\u0628\u0648\u0639 \u0627\u0644\u062b\u0627\u0646\u064a' };
     const GRADE_AR: Record<string, string> = {
-      'Grade 3 Primary': 'الصف الثالث الابتدائي',
-      'Grade 4 Primary': 'الصف الرابع الابتدائي',
-      'Grade 5 Primary': 'الصف الخامس الابتدائي',
-      'Grade 6 Primary': 'الصف السادس الابتدائي',
-      'Grade 1 Prep': 'الصف الأول الإعدادي',
-      'Grade 2 Prep': 'الصف الثاني الإعدادي',
-      'Grade 1 Secondary': 'الصف الأول الثانوي',
-      'Grade 2 Secondary': 'الصف الثاني الثانوي',
+      'Grade 3 Primary': '\u0627\u0644\u0635\u0641 \u0627\u0644\u062b\u0627\u0644\u062b \u0627\u0644\u0627\u0628\u062a\u062f\u0627\u0626\u064a', 'Grade 4 Primary': '\u0627\u0644\u0635\u0641 \u0627\u0644\u0631\u0627\u0628\u0639 \u0627\u0644\u0627\u0628\u062a\u062f\u0627\u0626\u064a',
+      'Grade 5 Primary': '\u0627\u0644\u0635\u0641 \u0627\u0644\u062e\u0627\u0645\u0633 \u0627\u0644\u0627\u0628\u062a\u062f\u0627\u0626\u064a', 'Grade 6 Primary': '\u0627\u0644\u0635\u0641 \u0627\u0644\u0633\u0627\u062f\u0633 \u0627\u0644\u0627\u0628\u062a\u062f\u0627\u0626\u064a',
+      'Grade 1 Prep': '\u0627\u0644\u0635\u0641 \u0627\u0644\u0623\u0648\u0644 \u0627\u0644\u0625\u0639\u062f\u0627\u062f\u064a', 'Grade 2 Prep': '\u0627\u0644\u0635\u0641 \u0627\u0644\u062b\u0627\u0646\u064a \u0627\u0644\u0625\u0639\u062f\u0627\u062f\u064a',
+      'Grade 1 Secondary': '\u0627\u0644\u0635\u0641 \u0627\u0644\u0623\u0648\u0644 \u0627\u0644\u062b\u0627\u0646\u0648\u064a', 'Grade 2 Secondary': '\u0627\u0644\u0635\u0641 \u0627\u0644\u062b\u0627\u0646\u064a \u0627\u0644\u062b\u0627\u0646\u0648\u064a',
     };
     const STAGE_AR: Record<string, string> = {
-      primary: 'المرحلة الابتدائية', prep: 'المرحلة الإعدادية', sec: 'المرحلة الثانوية',
+      primary: '\u0627\u0644\u0645\u0631\u062d\u0644\u0629 \u0627\u0644\u0627\u0628\u062a\u062f\u0627\u0626\u064a\u0629', prep: '\u0627\u0644\u0645\u0631\u062d\u0644\u0629 \u0627\u0644\u0625\u0639\u062f\u0627\u062f\u064a\u0629', sec: '\u0627\u0644\u0645\u0631\u062d\u0644\u0629 \u0627\u0644\u062b\u0627\u0646\u0648\u064a\u0629',
     };
 
-    const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
-    const pageW = 210, pageH = 297;
-    let firstPage = true;
-    const container = document.createElement('div');
-    container.style.cssText = 'position:fixed;top:-9999px;left:0;width:794px;z-index:-1;font-family:Arial,Helvetica,sans-serif;color:#000;background:#fff;';
-
-    const pages: HTMLDivElement[] = [];
+    let htmlPages = '';
 
     for (const day of DAYS) {
       const sessions = results.assignments[day] || [];
       const dayStandbys = results.standbys?.[day];
       const hasDayStandby = dayStandbys && Object.values(dayStandbys).some(s => s.length > 0);
       if (sessions.length === 0 && !hasDayStandby) continue;
-
       const weekKey = day.startsWith('W1') ? 'W1' : 'W2';
       const dayAr = DAY_AR[day] || day;
       const weekAr = WEEK_AR[weekKey] || '';
 
       for (const session of sessions) {
         if (session.committees.length === 0) continue;
+        const rowsHtml = session.committees.map((c: any) =>
+          '<tr><td rowspan="2" class="num-cell">' + c.serial + '</td><td class="name-cell">' + c.t1.name + '</td><td class="sig-cell"></td></tr>' +
+          '<tr><td class="name-cell">' + c.t2.name + '</td><td class="sig-cell"></td></tr>'
+        ).join('');
 
-        const pageDiv = document.createElement('div');
-        pageDiv.style.cssText = 'width:794px;padding:40px 50px;box-sizing:border-box;background:#fff;page-break-after:always;direction:rtl;';
-
-        // Header / Decoration
-        const headerHtml = `
-          <div style="text-align:center;margin-bottom:16px;">
-            <div style="font-size:18px;font-weight:bold;color:#1e3a5f;border-bottom:3px double #1e3a5f;padding-bottom:6px;display:inline-block;">
-              جدول إشراف الامتحانات
-            </div>
-          </div>
-          <div style="display:flex;flex-wrap:wrap;justify-content:space-between;font-size:13px;margin-bottom:14px;padding:8px 14px;background:#f0f4f8;border-radius:8px;border:1px solid #d0d8e0;">
-            <div style="font-weight:bold;"><span style="color:#555;">اليوم:</span> ${dayAr} (${weekAr})</div>
-            <div style="font-weight:bold;"><span style="color:#555;">الصف:</span> ${GRADE_AR[session.grade] || session.grade}</div>
-            <div style="font-weight:bold;"><span style="color:#555;">المادة:</span> ${session.subject || '—'}</div>
-            <div style="font-weight:bold;"><span style="color:#555;">التوقيت:</span> ${session.time}</div>
-          </div>
-        `;
-
-        // Table: each committee = 2 rows (names stacked vertically)
-        const nameStyle = "border:1px solid #333;padding:8px 10px;text-align:center;width:420px;font-size:14px;font-weight:bold;color:#000;font-family:Arial,Helvetica,sans-serif;";
-        const rowsHtml = session.committees.map(c => `
-          <tr>
-            <td rowspan="2" style="border:1px solid #333;padding:8px;text-align:center;width:50px;font-weight:bold;font-size:13px;vertical-align:middle;color:#000;">${c.serial}</td>
-            <td style="${nameStyle}">${c.t1.name}</td>
-            <td style="border:1px solid #333;padding:8px;text-align:center;width:110px;"></td>
-          </tr>
-          <tr>
-            <td style="${nameStyle}">${c.t2.name}</td>
-            <td style="border:1px solid #333;padding:8px;text-align:center;width:110px;"></td>
-          </tr>
-        `).join('');
-
-        const tableHtml = `
-          <table style="width:100%;border-collapse:collapse;margin-top:10px;">
-            <thead>
-              <tr style="background:#1e3a5f;color:#fff;">
-                <th style="border:1px solid #333;padding:9px 8px;text-align:center;width:50px;font-size:13px;">م</th>
-                <th style="border:1px solid #333;padding:9px 10px;text-align:center;width:420px;font-size:13px;">الاسم</th>
-                <th style="border:1px solid #333;padding:9px 8px;text-align:center;width:110px;font-size:13px;">التوقيع</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${rowsHtml}
-            </tbody>
-          </table>
-        `;
-        pageDiv.innerHTML = headerHtml + tableHtml;
-        pages.push(pageDiv);
-        container.appendChild(pageDiv);
+        htmlPages += '<div class="page"><div class="header-title">\u062c\u062f\u0648\u0644 \u0625\u0634\u0631\u0627\u0641 \u0627\u0644\u0627\u0645\u062a\u062d\u0627\u0646\u0627\u062a</div>' +
+          '<div class="header-info"><div><span class="label">\u0627\u0644\u064a\u0648\u0645:</span> ' + dayAr + ' (' + weekAr + ')</div>' +
+          '<div><span class="label">\u0627\u0644\u0635\u0641:</span> ' + (GRADE_AR[session.grade] || session.grade) + '</div>' +
+          '<div><span class="label">\u0627\u0644\u0645\u0627\u062f\u0629:</span> ' + (session.subject || '\u2014') + '</div>' +
+          '<div><span class="label">\u0627\u0644\u062a\u0648\u0642\u064a\u062a:</span> ' + session.time + '</div></div>' +
+          '<table><thead><tr><th class="th-num">\u0645</th><th class="th-name">\u0627\u0644\u0627\u0633\u0645</th><th class="th-sig">\u0627\u0644\u062a\u0648\u0642\u064a\u0639</th></tr></thead>' +
+          '<tbody>' + rowsHtml + '</tbody></table></div>';
       }
 
-      // Standby page
       if (hasDayStandby) {
-        const pageDiv = document.createElement('div');
-        pageDiv.style.cssText = 'width:794px;padding:40px 50px;box-sizing:border-box;background:#fff;page-break-after:always;';
-
         const stList: { stage: string; name: string }[] = [];
         for (const stage of ['primary', 'prep', 'sec']) {
-          const list = dayStandbys[stage] || [];
-          list.forEach(s => stList.push({ stage: STAGE_AR[stage], name: s.name }));
+          (dayStandbys[stage] || []).forEach((s: any) => stList.push({ stage: STAGE_AR[stage], name: s.name }));
         }
-
         if (stList.length > 0) {
-          const headerHtml = `
-            <div style="text-align:center;margin-bottom:20px;">
-              <div style="font-size:22px;font-weight:bold;color:#b47814;border-bottom:3px double #b47814;padding-bottom:8px;display:inline-block;">
-                المدرسين المتاحين (احتياطي)
-              </div>
-            </div>
-            <div style="font-size:15px;margin-bottom:18px;padding:10px 16px;background:#fffbeb;border-radius:8px;border:1px solid #fde68a;direction:rtl;">
-              <span style="font-weight:bold;color:#555;">اليوم:</span> <strong>${dayAr} (${weekAr})</strong>
-            </div>
-          `;
-
-          const rowsHtml = stList.map((s, i) => `
-            <tr>
-              <td style="border:1px solid #333;padding:7px 8px;text-align:center;width:50px;font-weight:bold;font-size:13px;">${i + 1}</td>
-              <td style="border:1px solid #333;padding:7px 10px;text-align:center;width:350px;font-size:13px;font-family:'Segoe UI',Tahoma,'Noto Sans Arabic',sans-serif;letter-spacing:0.3px;">${s.name}</td>
-              <td style="border:1px solid #333;padding:7px 8px;text-align:center;width:80px;"></td>
-              <td style="border:1px solid #333;padding:7px 10px;text-align:center;width:150px;font-size:12px;color:#555;">${s.stage}</td>
-            </tr>
-          `).join('');
-
-          const tableHtml = `
-            <table style="width:100%;border-collapse:collapse;margin-top:10px;">
-              <thead>
-                <tr style="background:#b47814;color:#fff;">
-                  <th style="border:1px solid #333;padding:9px 8px;text-align:center;width:50px;font-size:13px;">م</th>
-                  <th style="border:1px solid #333;padding:9px 10px;text-align:center;width:350px;font-size:13px;">الاسم</th>
-                  <th style="border:1px solid #333;padding:9px 8px;text-align:center;width:80px;font-size:13px;">التوقيع</th>
-                  <th style="border:1px solid #333;padding:9px 10px;text-align:center;width:150px;font-size:13px;">المرحلة</th>
-                </tr>
-              </thead>
-              <tbody>
-                ${rowsHtml}
-              </tbody>
-            </table>
-          `;
-
-          pageDiv.innerHTML = headerHtml + tableHtml;
-          pages.push(pageDiv);
-          container.appendChild(pageDiv);
+          const stRows = stList.map((s, i) => '<tr><td class="num-cell">' + (i+1) + '</td><td class="name-cell">' + s.name + '</td><td class="sig-cell"></td><td class="stage-cell">' + s.stage + '</td></tr>').join('');
+          htmlPages += '<div class="page"><div class="header-title standby">\u0627\u0644\u0645\u062f\u0631\u0633\u064a\u0646 \u0627\u0644\u0645\u062a\u0627\u062d\u064a\u0646 (\u0627\u062d\u062a\u064a\u0627\u0637\u064a)</div>' +
+            '<div class="header-info standby"><span class="label">\u0627\u0644\u064a\u0648\u0645:</span> <strong>' + dayAr + ' (' + weekAr + ')</strong></div>' +
+            '<table><thead><tr class="standby-hdr"><th class="th-num">\u0645</th><th class="th-name">\u0627\u0644\u0627\u0633\u0645</th><th class="th-sig">\u0627\u0644\u062a\u0648\u0642\u064a\u0639</th><th class="th-stage">\u0627\u0644\u0645\u0631\u062d\u0644\u0629</th></tr></thead>' +
+            '<tbody>' + stRows + '</tbody></table></div>';
         }
       }
     }
 
-    if (pages.length === 0) {
-      showToast('No results to export', 'error');
-      document.body.removeChild(container);
-      return;
-    }
-
-    document.body.appendChild(container);
-
-    try {
-      for (let i = 0; i < pages.length; i++) {
-        const canvas = await html2canvas(pages[i], {
-          scale: 2,
-          useCORS: true,
-          backgroundColor: '#ffffff',
-          width: 794,
-          windowWidth: 794,
-        });
-        const imgData = canvas.toDataURL('image/png');
-        if (!firstPage) doc.addPage();
-        firstPage = false;
-        const imgW = pageW;
-        const imgH = (canvas.height * imgW) / canvas.width;
-        doc.addImage(imgData, 'PNG', 0, 0, imgW, Math.min(imgH, pageH));
-      }
-      doc.save('exam_supervision_schedule.pdf');
-      showToast('PDF downloaded successfully!', 'success');
-    } catch (err) {
-      console.error('PDF export error:', err);
-      showToast('Error exporting PDF', 'error');
-    } finally {
-      document.body.removeChild(container);
-    }
+    if (!htmlPages) { showToast('No results to export', 'error'); return; }
+    const printWin = window.open('', '_blank');
+    if (!printWin) { showToast('Please allow popups', 'error'); return; }
+    const css = '*{margin:0;padding:0;box-sizing:border-box}body{font-family:Arial,Helvetica,sans-serif;color:#000;background:#fff}' +
+      '.page{width:210mm;min-height:297mm;padding:15mm 12mm;page-break-after:always}.page:last-child{page-break-after:auto}' +
+      '.header-title{text-align:center;font-size:18pt;font-weight:bold;color:#1e3a5f;border-bottom:3px double #1e3a5f;padding-bottom:6px;margin-bottom:14px;width:100%}' +
+      '.header-title.standby{color:#b47814;border-bottom-color:#b47814}' +
+      '.header-info{display:flex;flex-wrap:wrap;justify-content:space-between;font-size:11pt;margin-bottom:14px;padding:8px 12px;background:#f0f4f8;border-radius:6px;border:1px solid #d0d8e0;font-weight:bold}' +
+      '.header-info.standby{background:#fffbeb;border-color:#fde68a}.header-info .label{color:#555}' +
+      'table{width:100%;border-collapse:collapse;margin-top:8px}thead tr{background:#1e3a5f;color:#fff}thead tr.standby-hdr{background:#b47814}' +
+      'th{border:1px solid #333;padding:8px 6px;text-align:center;font-size:11pt}.th-num{width:40px}.th-name{width:auto}.th-sig{width:80px}.th-stage{width:120px}' +
+      'td{border:1px solid #333;padding:7px 8px;text-align:center;font-size:12pt;color:#000}' +
+      '.num-cell{font-weight:bold;font-size:11pt;vertical-align:middle;width:40px;color:#000}' +
+      '.name-cell{font-weight:bold;font-size:12pt;color:#000;text-align:center}' +
+      '.sig-cell{width:80px}.stage-cell{font-size:10pt;color:#555}' +
+      '@media print{.page{margin:0;padding:12mm 10mm}}';
+    printWin.document.write('<!DOCTYPE html><html dir="rtl" lang="ar"><head><meta charset="UTF-8"><style>' + css + '</style></head><body>' + htmlPages + '<' + 'script>window.onafterprint=function(){window.close()};setTimeout(function(){window.print()},400)</' + 'script></body></html>');
+    printWin.document.close();
+    showToast('Print dialog opened - save as PDF', 'success');
   };
+
 
   // ========== RESET ALL ==========
   const resetAll = async () => {
