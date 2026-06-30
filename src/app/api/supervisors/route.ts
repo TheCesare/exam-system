@@ -91,7 +91,7 @@ export async function PUT(request: NextRequest) {
     const settings = await getSettings()
     const supervisors: { id: string; name: string; password: string }[] = (settings.supervisors as any[]) || []
 
-    const idx = supervisors.findIndex(s => s.name === name)
+    const idx = supervisors.findIndex(s => s.name.toLowerCase() === name.toLowerCase())
     if (idx < 0) {
       return NextResponse.json({ success: false }, { status: 404 })
     }
