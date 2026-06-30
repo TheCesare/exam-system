@@ -1483,7 +1483,7 @@ export default function ExamSystem() {
   }
 
   const isAdmin = view === 'admin';
-  const canEdit = isAdmin || userPermissions.includes('teachers') || userPermissions.includes('schedule');
+  const canEdit = isAdmin || userPermissions.includes('teachers') || userPermissions.includes('schedule') || userPermissions.includes('schedule_edit');
   const roleLabel = isAdmin ? 'ADMIN' : currentUser || 'USER';
   const roleColor = isAdmin ? 'var(--accent2)' : 'var(--accent3)';
 
@@ -1491,6 +1491,8 @@ export default function ExamSystem() {
   const canAccessPage = (page: Page): boolean => {
     if (page === 'distribute' || page === 'log') return isAdmin; // Always admin-only
     if (isAdmin) return true; // Admin sees all
+    // schedule_edit grants same page visibility as schedule
+    if (page === 'schedule' && userPermissions.includes('schedule_edit')) return true;
     // Regular user: default access to teachers (view), results, stats
     if (!userPermissions || userPermissions.length === 0) {
       return page === 'teachers' || page === 'results' || page === 'stats';
@@ -1626,12 +1628,12 @@ export default function ExamSystem() {
                 const cell = getCell(grade, day);
                 return (
                   <div key={day} className="sg-cell">
-                    <input type="number" min="0" placeholder="Comms" value={cell.committees || ''} onChange={e => updateCell(grade, day, 'committees', parseInt(e.target.value) || 0)} readOnly={!isAdmin} style={!isAdmin ? { opacity: 0.7, cursor: 'not-allowed' } : {}} />
-                    <select value={cell.subject || ''} onChange={e => updateCell(grade, day, 'subject', e.target.value)} disabled={!isAdmin} style={!isAdmin ? { opacity: 0.7, cursor: 'not-allowed' } : {}}>
+                    <input type="number" min="0" placeholder="Comms" value={cell.committees || ''} onChange={e => updateCell(grade, day, 'committees', parseInt(e.target.value) || 0)} readOnly={!(isAdmin || userPermissions.includes('schedule_edit'))} style={!(isAdmin || userPermissions.includes('schedule_edit')) ? { opacity: 0.7, cursor: 'not-allowed' } : {}} />
+                    <select value={cell.subject || ''} onChange={e => updateCell(grade, day, 'subject', e.target.value)} disabled={!(isAdmin || userPermissions.includes('schedule_edit'))} style={!(isAdmin || userPermissions.includes('schedule_edit')) ? { opacity: 0.7, cursor: 'not-allowed' } : {}}>
                       <option value="">Subject</option>
                       {SUBJECTS.map(s => <option key={s} value={s}>{s}</option>)}
                     </select>
-                    <input type="text" placeholder="Time" value={cell.time || ''} onChange={e => updateCell(grade, day, 'time', e.target.value)} readOnly={!isAdmin} style={!isAdmin ? { opacity: 0.7, cursor: 'not-allowed' } : {}} />
+                    <input type="text" placeholder="Time" value={cell.time || ''} onChange={e => updateCell(grade, day, 'time', e.target.value)} readOnly={!(isAdmin || userPermissions.includes('schedule_edit'))} style={!(isAdmin || userPermissions.includes('schedule_edit')) ? { opacity: 0.7, cursor: 'not-allowed' } : {}} />
                   </div>
                 );
               })}
@@ -1639,12 +1641,12 @@ export default function ExamSystem() {
                 const cell = getCell(grade, day);
                 return (
                   <div key={day} className="sg-cell sg-w2-cell">
-                    <input type="number" min="0" placeholder="Comms" value={cell.committees || ''} onChange={e => updateCell(grade, day, 'committees', parseInt(e.target.value) || 0)} readOnly={!isAdmin} style={!isAdmin ? { opacity: 0.7, cursor: 'not-allowed' } : {}} />
-                    <select value={cell.subject || ''} onChange={e => updateCell(grade, day, 'subject', e.target.value)} disabled={!isAdmin} style={!isAdmin ? { opacity: 0.7, cursor: 'not-allowed' } : {}}>
+                    <input type="number" min="0" placeholder="Comms" value={cell.committees || ''} onChange={e => updateCell(grade, day, 'committees', parseInt(e.target.value) || 0)} readOnly={!(isAdmin || userPermissions.includes('schedule_edit'))} style={!(isAdmin || userPermissions.includes('schedule_edit')) ? { opacity: 0.7, cursor: 'not-allowed' } : {}} />
+                    <select value={cell.subject || ''} onChange={e => updateCell(grade, day, 'subject', e.target.value)} disabled={!(isAdmin || userPermissions.includes('schedule_edit'))} style={!(isAdmin || userPermissions.includes('schedule_edit')) ? { opacity: 0.7, cursor: 'not-allowed' } : {}}>
                       <option value="">Subject</option>
                       {SUBJECTS.map(s => <option key={s} value={s}>{s}</option>)}
                     </select>
-                    <input type="text" placeholder="Time" value={cell.time || ''} onChange={e => updateCell(grade, day, 'time', e.target.value)} readOnly={!isAdmin} style={!isAdmin ? { opacity: 0.7, cursor: 'not-allowed' } : {}} />
+                    <input type="text" placeholder="Time" value={cell.time || ''} onChange={e => updateCell(grade, day, 'time', e.target.value)} readOnly={!(isAdmin || userPermissions.includes('schedule_edit'))} style={!(isAdmin || userPermissions.includes('schedule_edit')) ? { opacity: 0.7, cursor: 'not-allowed' } : {}} />
                   </div>
                 );
               })}
@@ -1993,18 +1995,34 @@ export default function ExamSystem() {
             <div style={{ fontSize: 12, color: 'var(--text2)', marginBottom: 10, fontWeight: 600 }}>Access Permissions:</div>
             <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap' }}>
               {['teachers', 'schedule', 'results', 'stats'].map(perm => (
-                <label key={perm} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer', color: 'var(--text)' }}>
-                  <input
-                    type="checkbox"
-                    checked={supFormPermissions.includes(perm)}
-                    onChange={e => {
-                      if (e.target.checked) setSupFormPermissions(prev => [...prev, perm]);
-                      else setSupFormPermissions(prev => prev.filter(p => p !== perm));
-                    }}
-                    style={{ width: 16, height: 16, accentColor: 'var(--accent)' }}
-                  />
-                  {perm === 'teachers' ? 'Teachers Page' : perm === 'schedule' ? 'Schedule Page' : perm === 'results' ? 'Results Page' : 'Statistics Page'}
-                </label>
+                <div key={perm} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer', color: 'var(--text)' }}>
+                    <input
+                      type="checkbox"
+                      checked={supFormPermissions.includes(perm)}
+                      onChange={e => {
+                        if (e.target.checked) setSupFormPermissions(prev => [...prev, perm]);
+                        else setSupFormPermissions(prev => prev.filter(p => p !== perm && p !== 'schedule_edit'));
+                      }}
+                      style={{ width: 16, height: 16, accentColor: 'var(--accent)' }}
+                    />
+                    {perm === 'teachers' ? 'Teachers Page' : perm === 'schedule' ? 'Schedule Page' : perm === 'results' ? 'Results Page' : 'Statistics Page'}
+                  </label>
+                  {perm === 'schedule' && supFormPermissions.includes('schedule') && (
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, cursor: 'pointer', color: 'var(--text2)', paddingLeft: 22 }}>
+                      <input
+                        type="checkbox"
+                        checked={supFormPermissions.includes('schedule_edit')}
+                        onChange={e => {
+                          if (e.target.checked) setSupFormPermissions(prev => [...prev, 'schedule_edit']);
+                          else setSupFormPermissions(prev => prev.filter(p => p !== 'schedule_edit'));
+                        }}
+                        style={{ width: 14, height: 14, accentColor: 'var(--accent2)' }}
+                      />
+                      Can Edit Schedule?
+                    </label>
+                  )}
+                </div>
               ))}
             </div>
           </div>
@@ -2025,7 +2043,7 @@ export default function ExamSystem() {
                   <td style={{ fontWeight: 600, color: 'var(--text)' }}>{s.name}</td>
                   <td style={{ fontSize: 12 }}>
                     {(s.permissions && s.permissions.length > 0) ? s.permissions.map(p => (
-                      <span key={p} className="badge badge-blue" style={{ marginRight: 4 }}>{p}</span>
+                      <span key={p} className="badge badge-blue" style={{ marginRight: 4, ...(p === 'schedule_edit' ? { background: 'var(--accent2)', color: '#fff' } : {}) }}>{p === 'schedule_edit' ? 'Edit' : p}</span>
                     )) : <span style={{ color: 'var(--text2)' }}>Default (view only)</span>}
                   </td>
                   <td>
