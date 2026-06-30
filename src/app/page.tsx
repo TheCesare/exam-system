@@ -1252,8 +1252,8 @@ export default function ExamSystem() {
       for (const session of sessions) {
         if (session.committees.length === 0) continue;
         const rowsHtml = session.committees.map((c: any) =>
-          '<tr><td rowspan="2" class="num-cell">' + c.serial + '</td><td class="name-cell">' + c.t1.name + '</td><td class="sig-cell"></td></tr>' +
-          '<tr><td class="name-cell">' + c.t2.name + '</td><td class="sig-cell"></td></tr>'
+          '<tr><td rowspan="2" class="num-cell">' + c.serial + '</td><td class="name-cell">' + c.t1.name + '</td><td class="sig-cell"></td><td class="notes-cell"></td></tr>' +
+          '<tr class="row2"><td class="name-cell">' + c.t2.name + '</td><td class="sig-cell"></td><td class="notes-cell"></td></tr>'
         ).join('');
 
         htmlPages += '<div class="page"><div class="header-title">\u062c\u062f\u0648\u0644 \u0625\u0634\u0631\u0627\u0641 \u0627\u0644\u0627\u0645\u062a\u062d\u0627\u0646\u0627\u062a</div>' +
@@ -1261,7 +1261,7 @@ export default function ExamSystem() {
           '<div><span class="label">\u0627\u0644\u0635\u0641:</span> ' + (GRADE_AR[session.grade] || session.grade) + '</div>' +
           '<div><span class="label">\u0627\u0644\u0645\u0627\u062f\u0629:</span> ' + (session.subject || '\u2014') + '</div>' +
           '<div><span class="label">\u0627\u0644\u062a\u0648\u0642\u064a\u062a:</span> ' + session.time + '</div></div>' +
-          '<table><thead><tr><th class="th-num">\u0645</th><th class="th-name">\u0627\u0644\u0627\u0633\u0645</th><th class="th-sig">\u0627\u0644\u062a\u0648\u0642\u064a\u0639</th></tr></thead>' +
+          '<table><thead><tr><th class="th-num">\u0645</th><th class="th-name">\u0627\u0644\u0627\u0633\u0645</th><th class="th-sig">\u0627\u0644\u062a\u0648\u0642\u064a\u0639</th><th class="th-notes">\u0627\u0644\u0645\u0644\u0627\u062d\u0638\u0627\u062a</th></tr></thead>' +
           '<tbody>' + rowsHtml + '</tbody></table></div>';
       }
 
@@ -1271,10 +1271,10 @@ export default function ExamSystem() {
           (dayStandbys[stage] || []).forEach((s: any) => stList.push({ stage: STAGE_AR[stage], name: s.name }));
         }
         if (stList.length > 0) {
-          const stRows = stList.map((s, i) => '<tr><td class="num-cell">' + (i+1) + '</td><td class="name-cell">' + s.name + '</td><td class="sig-cell"></td><td class="stage-cell">' + s.stage + '</td></tr>').join('');
+          const stRows = stList.map((s, i) => '<tr><td class="num-cell">' + (i+1) + '</td><td class="name-cell">' + s.name + '</td><td class="sig-cell"></td><td class="notes-cell"></td><td class="stage-cell">' + s.stage + '</td></tr>').join('');
           htmlPages += '<div class="page"><div class="header-title standby">\u0627\u0644\u0645\u062f\u0631\u0633\u064a\u0646 \u0627\u0644\u0645\u062a\u0627\u062d\u064a\u0646 (\u0627\u062d\u062a\u064a\u0627\u0637\u064a)</div>' +
             '<div class="header-info standby"><span class="label">\u0627\u0644\u064a\u0648\u0645:</span> <strong>' + dayAr + ' (' + weekAr + ')</strong></div>' +
-            '<table><thead><tr class="standby-hdr"><th class="th-num">\u0645</th><th class="th-name">\u0627\u0644\u0627\u0633\u0645</th><th class="th-sig">\u0627\u0644\u062a\u0648\u0642\u064a\u0639</th><th class="th-stage">\u0627\u0644\u0645\u0631\u062d\u0644\u0629</th></tr></thead>' +
+            '<table><thead><tr class="standby-hdr"><th class="th-num">\u0645</th><th class="th-name">\u0627\u0644\u0627\u0633\u0645</th><th class="th-sig">\u0627\u0644\u062a\u0648\u0642\u064a\u0639</th><th class="th-notes">\u0627\u0644\u0645\u0644\u0627\u062d\u0638\u0627\u062a</th><th class="th-stage">\u0627\u0644\u0645\u0631\u062d\u0644\u0629</th></tr></thead>' +
             '<tbody>' + stRows + '</tbody></table></div>';
         }
       }
@@ -1290,11 +1290,12 @@ export default function ExamSystem() {
       '.header-info{display:flex;flex-wrap:wrap;justify-content:space-between;font-size:11pt;margin-bottom:14px;padding:8px 12px;background:#f0f4f8;border-radius:6px;border:1px solid #d0d8e0;font-weight:bold}' +
       '.header-info.standby{background:#fffbeb;border-color:#fde68a}.header-info .label{color:#555}' +
       'table{width:100%;border-collapse:collapse;margin-top:8px}thead tr{background:#1e3a5f;color:#fff}thead tr.standby-hdr{background:#b47814}' +
-      'th{border:1px solid #333;padding:8px 6px;text-align:center;font-size:11pt}.th-num{width:40px}.th-name{width:auto}.th-sig{width:80px}.th-stage{width:120px}' +
+      'th{border:1px solid #333;padding:8px 6px;text-align:center;font-size:11pt}.th-num{width:40px}.th-name{width:auto}.th-sig{width:80px}.th-notes{width:120px}.th-stage{width:120px}' +
       'td{border:1px solid #333;padding:7px 8px;text-align:center;font-size:12pt;color:#000}' +
-      '.num-cell{font-weight:bold;font-size:11pt;vertical-align:middle;width:40px;color:#000}' +
+      '.num-cell{font-size:11pt;vertical-align:middle;width:40px;color:#000}' +
       '.name-cell{font-weight:bold;font-size:12pt;color:#000;text-align:center}' +
-      '.sig-cell{width:80px}.stage-cell{font-size:10pt;color:#555}' +
+      '.sig-cell{width:80px}.notes-cell{width:120px}.stage-cell{font-size:10pt;color:#555}' +
+      'tr.row2 td{border-top:none}' +
       '@media print{.page{margin:0;padding:12mm 10mm}}';
     printWin.document.write('<!DOCTYPE html><html dir="rtl" lang="ar"><head><meta charset="UTF-8"><style>' + css + '</style></head><body>' + htmlPages + '<' + 'script>window.onafterprint=function(){window.close()};setTimeout(function(){window.print()},400)</' + 'script></body></html>');
     printWin.document.close();
