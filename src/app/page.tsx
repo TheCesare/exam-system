@@ -1218,10 +1218,7 @@ setUserPermissions([]);
           const bWasYesterday = yesterdayStandby.has(b.id) ? 100 : 0;
           const aFree = isCompletelyFreeToday(a) ? 0 : 10;
           const bFree = isCompletelyFreeToday(b) ? 0 : 10;
-          // Admin teachers: slightly prefer them for standby under pressure (W2)
-          const aAdmin = (gradingPref && a.subject === 'Admin' && WEEK2_DAYS.includes(day) && (adminW2Count[a.id] || 0) < 3) ? -8 : 0;
-          const bAdmin = (gradingPref && b.subject === 'Admin' && WEEK2_DAYS.includes(day) && (adminW2Count[b.id] || 0) < 3) ? -8 : 0;
-          return (teacherStandbyCount[a.id] + aWasYesterday + aFree + aAdmin) - (teacherStandbyCount[b.id] + bWasYesterday + bFree + bAdmin);
+          return (teacherStandbyCount[a.id] + aWasYesterday + aFree) - (teacherStandbyCount[b.id] + bWasYesterday + bFree);
         });
 
         // Pick min(2, candidates.length) teachers
@@ -1839,7 +1836,7 @@ setUserPermissions([]);
             <label style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, cursor: 'pointer', padding: '8px 12px', background: 'rgba(99,179,237,0.06)', borderRadius: 8, border: '1px solid rgba(99,179,237,0.15)' }}>
               <input type="checkbox" id="rule-grading-pref" defaultChecked={false} style={{ width: 16, height: 16, accentColor: 'var(--accent3)' }} />
               <span style={{ color: 'var(--accent3)', fontWeight: 600 }}>W2 Grading Mode</span>
-              <span style={{ fontSize: 11, color: 'var(--text2)' }}>(Admin 2-3x, subject→1st session, Admin standby)</span>
+              <span style={{ fontSize: 11, color: 'var(--text2)' }}>(Admin 2-3x, subject→1st session)</span>
             </label>
             <div style={{ fontSize: 11, color: 'var(--text2)', lineHeight: 1.6, padding: '4px 0' }}>
               • Chronological day-by-day processing<br/>
@@ -1849,7 +1846,7 @@ setUserPermissions([]);
               • No same grade on consecutive days<br/>
               • No time overlap for same teacher<br/>
               • Old teachers (notes: "old") → secondary only, paired with sec-note teacher<br/>
-              • <span style={{ color: 'var(--accent3)' }}>W2 Grading:</span> Admin 2-3 duties, subject teachers → 1st session, Admin → standby
+              • <span style={{ color: 'var(--accent3)' }}>W2 Grading:</span> Admin 2-3 duties, subject teachers → 1st session
             </div>
           </div>
         </div>
