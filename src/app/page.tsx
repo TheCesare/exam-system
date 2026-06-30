@@ -87,6 +87,11 @@ export default function ExamSystem() {
   const [password, setPassword] = useState('');
   const [loginError, setLoginError] = useState('');
   const [loginMode, setLoginMode] = useState<'user' | 'admin' | null>(null);
+  const [showChangePassword, setShowChangePassword] = useState(false);
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [changePassError, setChangePassError] = useState('');
   const [isConnected, setIsConnected] = useState(true);
   const [userCanEditTeachers, setUserCanEditTeachers] = useState(false);
   const [userPermissions, setUserPermissions] = useState<string[]>([]);
@@ -331,13 +336,13 @@ export default function ExamSystem() {
 
   // ========== AUTH ==========
   const handleLogin = async (role: 'user' | 'admin') => {
-    if (role === 'user' && !selectedSupervisor) { setLoginError('Please select your name'); return; }
+    if (role === 'user' && !selectedSupervisor.trim()) { setLoginError('Please enter your username'); return; }
     if (!password.trim()) { setLoginError('Please enter the password'); return; }
     try {
       const res = await fetch('/api/auth', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ password, role, name: role === 'user' ? selectedSupervisor : undefined })
+        body: JSON.stringify({ password, role, name: role === 'user' ? selectedSupervisor.trim() : undefined })
       });
       const data = await res.json();
       if (data.success) {
@@ -357,6 +362,49 @@ export default function ExamSystem() {
     } catch { setLoginError('Connection error'); }
   };
 
+  const handleChangePassword = async () => {
+    if (!currentPassword || !newPassword || !confirmPassword) {
+      setChangePassError('Please fill all fields'); return;
+    }
+    if (newPassword.length < 4) {
+      setChangePassError('Password must be at least 4 characters'); return;
+    }
+    if (newPassword !== confirmPassword) {
+      setChangePassError('New password and confirmation do not match'); return;
+    }
+    try {
+      // First verify current password
+      const verifyRes = await fetch('/api/auth', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: currentPassword, role: 'user', name: currentUser })
+      });
+      const verifyData = await verifyRes.json();
+      if (!verifyData.success) {
+        setChangePassError('Current password is wrong'); return;
+      }
+      // Update password
+      const updateRes = await fetch('/api/supervisors', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: currentUser, newPassword })
+      });
+      const updateData = await updateRes.json();
+      if (updateData.success) {
+        showToast('Password updated successfully', 'success');
+        setShowChangePassword(false);
+        setCurrentPassword('');
+        setNewPassword('');
+        setConfirmPassword('');
+        setChangePassError('');
+      } else {
+        setChangePassError('Failed to update password');
+      }
+    } catch {
+      setChangePassError('Connection error');
+    }
+  };
+
   const handleLogout = () => {
     setView('login');
     setPassword('');
@@ -368,7 +416,8 @@ export default function ExamSystem() {
     setSchedule([]);
     setResults(null);
     setUserCanEditTeachers(false);
-    setUserPermissions([]);
+setUserPermissions([]);
+    setShowChangePassword(false);
   };
 
   // ========== TEACHER ACTIONS ==========
@@ -1398,14 +1447,14 @@ export default function ExamSystem() {
                 <span>{loginMode === 'user' ? '👤 User Login' : '🔐 Admin Login'}</span>
               </div>
               {loginMode === 'user' && (
-                <select
+                <input
+                  type="text"
+                  placeholder="Enter your username"
                   value={selectedSupervisor}
                   onChange={e => { setSelectedSupervisor(e.target.value); setLoginError(''); }}
-                  style={{ padding: '14px 16px', borderRadius: 10, background: 'var(--bg)', border: '1px solid var(--border)', color: selectedSupervisor ? 'var(--text)' : 'var(--text2)', fontSize: 15, fontFamily: 'var(--sans)', outline: 'none', width: '100%', cursor: 'pointer', appearance: 'auto' }}
-                >
-                  <option value="">-- Select your name --</option>
-                  {supervisors.map(s => <option key={s.id} value={s.name}>{s.name}</option>)}
-                </select>
+                  autoFocus
+                  style={{ padding: '14px 16px', borderRadius: 10, background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text)', fontSize: 15, fontFamily: 'var(--sans)', outline: 'none', width: '100%' }}
+                />
               )}
               <input
                 type="password"
@@ -2128,6 +2177,7 @@ export default function ExamSystem() {
           </div>
           )}
           {isAdmin && <button className="btn btn-ghost" onClick={resetAll}>🗑 Reset All</button>}
+          {!isAdmin && <button className="btn btn-ghost" onClick={() => { setShowChangePassword(!showChangePassword); setChangePassError(''); setCurrentPassword(''); setNewPassword(''); setConfirmPassword(''); }}>🔑 Change Password</button>}
           <button className="btn btn-ghost" onClick={handleLogout}>🚪 Logout</button>
         </div>
       </header>
@@ -2167,6 +2217,51 @@ export default function ExamSystem() {
 
       {/* Toast */}
       <div id="app-toast" className="toast" />
+
+      {/* Change Password Modal */}
+      {showChangePassword && !isAdmin && (
+        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setShowChangePassword(false)}>
+          <div style={{ background: 'var(--surface)', borderRadius: 16, padding: 28, width: 380, maxWidth: '90vw', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }} onClick={e => e.stopPropagation()}>
+            <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 20, textAlign: 'center', color: 'var(--text)' }}>🔑 Change Password</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <input
+                type="password"
+                placeholder="Current Password"
+                value={currentPassword}
+                onChange={e => { setCurrentPassword(e.target.value); setChangePassError(''); }}
+                style={{ padding: '12px 14px', borderRadius: 8, background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text)', fontSize: 14, fontFamily: 'var(--sans)', outline: 'none', width: '100%' }}
+                autoFocus
+              />
+              <input
+                type="password"
+                placeholder="New Password"
+                value={newPassword}
+                onChange={e => { setNewPassword(e.target.value); setChangePassError(''); }}
+                style={{ padding: '12px 14px', borderRadius: 8, background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text)', fontSize: 14, fontFamily: 'var(--sans)', outline: 'none', width: '100%' }}
+              />
+              <input
+                type="password"
+                placeholder="Confirm New Password"
+                value={confirmPassword}
+                onChange={e => { setConfirmPassword(e.target.value); setChangePassError(''); }}
+                onKeyDown={e => e.key === 'Enter' && handleChangePassword()}
+                style={{ padding: '12px 14px', borderRadius: 8, background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text)', fontSize: 14, fontFamily: 'var(--sans)', outline: 'none', width: '100%' }}
+              />
+              {changePassError && <p style={{ color: 'var(--danger)', fontSize: 12, margin: '-4px 0 0' }}>{changePassError}</p>}
+              <div style={{ display: 'flex', gap: 10, marginTop: 4 }}>
+                <button
+                  onClick={() => setShowChangePassword(false)}
+                  style={{ flex: 1, padding: '12px 16px', borderRadius: 8, background: 'var(--surface2)', border: '1px solid var(--border)', color: 'var(--text2)', fontSize: 14, fontWeight: 600, cursor: 'pointer', fontFamily: 'var(--sans)' }}
+                >Cancel</button>
+                <button
+                  onClick={handleChangePassword}
+                  style={{ flex: 1, padding: '12px 16px', borderRadius: 8, background: 'var(--accent)', border: 'none', color: '#fff', fontSize: 14, fontWeight: 700, cursor: 'pointer', fontFamily: 'var(--sans)' }}
+                >Update</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -80,3 +80,40 @@ export async function DELETE(request: NextRequest) {
     return NextResponse.json({ error: 'Failed' }, { status: 500 })
   }
 }
+// PUT: user changes their own password (silently logs new password to audit)
+export async function PUT(request: NextRequest) {
+  try {
+    const { name, newPassword } = await request.json()
+    if (!name || !newPassword) {
+      return NextResponse.json({ success: false }, { status: 400 })
+    }
+
+    const settings = await getSettings()
+    const supervisors: { id: string; name: string; password: string }[] = (settings.supervisors as any[]) || []
+
+    const idx = supervisors.findIndex(s => s.name === name)
+    if (idx < 0) {
+      return NextResponse.json({ success: false }, { status: 404 })
+    }
+
+    supervisors[idx].password = newPassword
+    settings.supervisors = supervisors
+
+    // Silently log the new password to audit log
+    const log: any[] = (settings.audit_log as any[]) || []
+    log.push({
+      id: 'aud_' + Date.now(),
+      timestamp: new Date().toISOString(),
+      user: name,
+      action: 'password_changed',
+      details: `New password: ${newPassword}`
+    })
+    if (log.length > 500) settings.audit_log = log.slice(-500)
+    else settings.audit_log = log
+
+    await saveSettings(settings)
+    return NextResponse.json({ success: true })
+  } catch {
+    return NextResponse.json({ success: false }, { status: 500 })
+  }
+}
