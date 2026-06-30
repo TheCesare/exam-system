@@ -599,8 +599,24 @@ setUserPermissions([]);
     const ruleDayLimit = (document.getElementById('rule-daylimit') as HTMLInputElement)?.checked ?? true;
     const ruleNotes = (document.getElementById('rule-notes') as HTMLInputElement)?.checked ?? true;
     const includeAdminW2 = (document.getElementById('rule-admin-w2') as HTMLInputElement)?.checked ?? false;
+    const gradingPref = (document.getElementById('rule-grading-pref') as HTMLInputElement)?.checked ?? false;
 
     // ---- Admin handling: Admin subject excluded by default, included only for W2 peak days ----
+
+    // ---- Helper: Check if teacher has secondary supervision notes ----
+    const hasSecNotes = (t: Teacher): boolean => {
+      if (!t.notes || t.notes.trim() === '') return false;
+      const n = t.notes.toLowerCase();
+      return /\b(secondary|sec)\b/i.test(n) || n.includes('\u062b\u0627\u0646\u0648\u064a');
+    };
+
+    // ---- Helper: Check if a session time is "first session" (morning, before 11:00 = 660 min) ----
+    const isFirstSession = (startMin: number): boolean => startMin < 660;
+
+    // ---- Build map: day -> set of subjects examined that day (for grading preference) ----
+    const subjectsByDay: Record<string, Set<string>> = {};
+    DAYS.forEach(d => { subjectsByDay[d] = new Set(); });
+    // Will be populated after slots are built below
 
     // ---- Initialize tracking ----
     const tracking: Record<string, TrackingEntry> = {};
@@ -624,6 +640,29 @@ setUserPermissions([]);
         }
       });
     });
+
+    // Populate subjectsByDay: which subjects have exams on each day
+    for (const day of DAYS) {
+      for (const slot of slotsByDay[day]) {
+        if (slot.subject) subjectsByDay[day].add(slot.subject);
+      }
+    }
+
+    // ---- Grading-eligible helpers ----
+    // A teacher is grading-eligible on a day if: it's Week 2 AND their subject was examined the PREVIOUS day
+    const gradingTeacherW2Count: Record<string, number> = {};
+    teachers.forEach(t => { gradingTeacherW2Count[t.id] = 0; });
+
+    const isGradingEligible = (teacher: Teacher, day: string): boolean => {
+      if (!gradingPref) return false;
+      if (!WEEK2_DAYS.includes(day)) return false;
+      const idx = DAYS.indexOf(day);
+      if (idx <= 0) return false;
+      const prevDay = DAYS[idx - 1];
+      const prevSubjs = subjectsByDay[prevDay];
+      if (!prevSubjs) return false;
+      return prevSubjs.has(teacher.subject);
+    };
 
     // ---- Build final assignments structure ----
     const finalAssignments: Record<string, SessionResult[]> = {};
@@ -714,13 +753,24 @@ setUserPermissions([]);
         if (tr.assignedSlots.some(s => s.day === slot.day && !(slot.timeInfo.end <= s.start || slot.timeInfo.start >= s.end))) continue;
         // HARD: MAX 2 committees per teacher per day (NEVER relaxed)
         if (ruleDayLimit && tr.dayComm[slot.day] >= 2) continue;
+        // HARD: Grading-eligible teachers: max 3 supervisions during Week 2
+        if (isGradingEligible(t, slot.day) && (gradingTeacherW2Count[t.id] || 0) >= 3) continue;
         // SOFT: No same grade on consecutive days (can be relaxed)
         if (!relaxAdj && wasSameGradeAdjacent(tr, slot)) continue;
         // Scoring: HOURS dominate (500x), then committees (10x), tiny noise for variety
         // Admin subject = HEAVY penalty (always last choice)
         const isAdmin = t.subject === 'Admin';
         const adminPenalty = isAdmin ? 50000 : 0;
-        const score = tr.totalHours * 500 + tr.totalComm * 10 + adminPenalty + Math.random() * 0.1;
+        // Grading preference: bonus for first session, penalty for second session (soft, flexible)
+        let gradingBonus = 0;
+        if (isGradingEligible(t, slot.day)) {
+          if (isFirstSession(slot.timeInfo.start)) {
+            gradingBonus = -150; // prefer first session for grading
+          } else {
+            gradingBonus = 200; // discourage second session
+          }
+        }
+        const score = tr.totalHours * 500 + tr.totalComm * 10 + adminPenalty + gradingBonus + Math.random() * 0.1;
         candidates.push({ teacher: t, score });
       }
       if (candidates.length === 0) return null;
@@ -803,11 +853,13 @@ setUserPermissions([]);
         let t1: Teacher | null = null;
         let t2: Teacher | null = null;
 
-        // Helper: filter old teachers not exceeding 3-day max and not already assigned today
+        // Helper: filter old teachers not exceeding 3-day max, not already assigned today, and ONLY for secondary slots
         const availableOldTeachers = (blockedId: string | null, day: string) => {
           return oldTeachers.filter(ot => {
             if (blockedId && ot.id === blockedId) return false;
             if ((oldTeacherDays[ot.id] || 0) >= 3) return false;
+            // RULE: Old teachers supervise SECONDARY ONLY
+            if (slot.stage !== 'sec') return false;
             const tr = tracking[ot.id];
             if (tr.assignedSlots.some(s => s.day === day && !(slot.timeInfo.end <= s.start || slot.timeInfo.start >= s.end))) return false;
             return true;
@@ -832,25 +884,45 @@ setUserPermissions([]);
           if (isOldTeacher(t1) && !tr.assignedSlots.some((s, idx) => idx < tr.assignedSlots.length - 1 && s.day === slot.day)) {
             oldTeacherDays[t1.id] = (oldTeacherDays[t1.id] || 0) + 1;
           }
+          // Track grading-eligible W2 count
+          if (isGradingEligible(t1, slot.day)) {
+            gradingTeacherW2Count[t1.id] = (gradingTeacherW2Count[t1.id] || 0) + 1;
+          }
         } else { standbyCount++; }
 
         // T2: pairing rule — classified teacher (has notes) must pair with unclassified
+        // ADDITIONAL: if T1 is old teacher, T2 must have secondary notes (relaxable)
+        // ADDITIONAL: if T2 ends up being old, T1 must have secondary notes (checked after T2 found)
         const blocked = t1?.id || null;
         const t1Classified = t1 ? !!(t1.notes && t1.notes.trim() !== '') : false;
-        const t2Filtered = t1Classified ? dayPool.filter(t => t.id !== blocked && (!t.notes || t.notes.trim() === '')) : dayPool;
+        const t1IsOld = t1 ? isOldTeacher(t1) : false;
 
-        t2 = findBest(blocked, slot, t2Filtered, false);
-        if (!t2) t2 = findBest(blocked, slot, t2Filtered, true);
-        if (!t2) t2 = findBestRelaxed(blocked, slot, t2Filtered);
-        if (!t2) t2 = findBestForceDay(blocked, slot, t2Filtered);
-        // Relax pairing rule if no unclassified teacher available
-        if (!t2 && t1Classified) {
+        let t2Pool: Teacher[] = dayPool.filter(t => t.id !== blocked);
+        // Classified pairing: if T1 has notes, T2 should have no notes
+        if (t1Classified && !t1IsOld) {
+          t2Pool = t2Pool.filter(t => !t.notes || t.notes.trim() === '');
+        }
+        // Old teacher pairing: if T1 is old, T2 MUST have secondary supervision notes
+        if (t1IsOld) {
+          const secNotePool = t2Pool.filter(t => hasSecNotes(t));
+          if (secNotePool.length > 0) {
+            t2Pool = secNotePool;
+          }
+          // If no sec-note teachers available, relax (use full pool)
+        }
+
+        t2 = findBest(blocked, slot, t2Pool, false);
+        if (!t2) t2 = findBest(blocked, slot, t2Pool, true);
+        if (!t2) t2 = findBestRelaxed(blocked, slot, t2Pool);
+        if (!t2) t2 = findBestForceDay(blocked, slot, t2Pool);
+        // Relax pairing rule if no suitable teacher found
+        if (!t2 && (t1Classified || t1IsOld)) {
           t2 = findBest(blocked, slot, dayPool, false);
           if (!t2) t2 = findBest(blocked, slot, dayPool, true);
           if (!t2) t2 = findBestRelaxed(blocked, slot, dayPool);
           if (!t2) t2 = findBestForceDay(blocked, slot, dayPool);
         }
-        // Last resort: try old teachers for T2
+        // Last resort: try old teachers for T2 (only for sec slots)
         if (!t2) {
           const oldPool = availableOldTeachers(blocked, slot.day);
           t2 = findBest(blocked, slot, oldPool, false);
@@ -865,6 +937,10 @@ setUserPermissions([]);
           // Track old teacher days
           if (isOldTeacher(t2) && !tr.assignedSlots.some((s, idx) => idx < tr.assignedSlots.length - 1 && s.day === slot.day)) {
             oldTeacherDays[t2.id] = (oldTeacherDays[t2.id] || 0) + 1;
+          }
+          // Track grading-eligible W2 count
+          if (isGradingEligible(t2, slot.day)) {
+            gradingTeacherW2Count[t2.id] = (gradingTeacherW2Count[t2.id] || 0) + 1;
           }
         } else { standbyCount++; }
 
@@ -1128,7 +1204,11 @@ setUserPermissions([]);
           const bWasYesterday = yesterdayStandby.has(b.id) ? 100 : 0;
           const aFree = isCompletelyFreeToday(a) ? 0 : 10;
           const bFree = isCompletelyFreeToday(b) ? 0 : 10;
-          return (teacherStandbyCount[a.id] + aWasYesterday + aFree) - (teacherStandbyCount[b.id] + bWasYesterday + bFree);
+          // Grading-eligible teachers: slightly prefer them for standby (they may be needed for pressure)
+          // But don't override rotation fairness - just a small bonus
+          const aGrading = (gradingPref && isGradingEligible(a, day) && (gradingTeacherW2Count[a.id] || 0) < 3) ? -5 : 0;
+          const bGrading = (gradingPref && isGradingEligible(b, day) && (gradingTeacherW2Count[b.id] || 0) < 3) ? -5 : 0;
+          return (teacherStandbyCount[a.id] + aWasYesterday + aFree + aGrading) - (teacherStandbyCount[b.id] + bWasYesterday + bFree + bGrading);
         });
 
         // Pick min(2, candidates.length) teachers
@@ -1243,23 +1323,52 @@ setUserPermissions([]);
       }
     }
 
+    // V-Check 8: Old teachers must only supervise secondary
+    if (ruleNotes) {
+      for (const day of DAYS) {
+        for (const sess of finalAssignments[day]) {
+          const stage = getStage(sess.grade);
+          if (stage === 'sec') continue; // old teachers ARE allowed in sec, skip
+          for (const c of sess.committees) {
+            [c.t1, c.t2].forEach(who => {
+              if (!who.id) return;
+              const tch = teachers.find(x => x.id === who.id);
+              if (tch && isOldTeacher(tch)) {
+                violations.push(`${tch.name} -> old teacher in non-secondary stage (${stage}) on ${day}`);
+              }
+            });
+          }
+        }
+      }
+    }
+
+    // V-Check 9: Grading-eligible teachers W2 max 3
+    if (gradingPref) {
+      for (const t of teachers) {
+        const w2Count = gradingTeacherW2Count[t.id] || 0;
+        if (w2Count > 3) {
+          violations.push(`${t.name} -> grading-eligible teacher assigned ${w2Count} times in W2 (max 3)`);
+        }
+      }
+    }
+
     // ---- Build summary statistics (from verified tracking) ----
     const allH = teachers.map(t => tracking[t.id]?.totalHours || 0);
     const avgAll = allH.length ? allH.reduce((a, b) => a + b, 0) / allH.length : 0;
     const spread = allH.length ? Math.sqrt(allH.reduce((s, h) => s + (h - avgAll) ** 2, 0) / allH.length) : 0;
-    let msg = `v11 | Avg: ${avgAll.toFixed(1)}h | Spread: ${spread.toFixed(1)} | Min: ${allH.length ? Math.min(...allH).toFixed(1) : 0}h | Max: ${allH.length ? Math.max(...allH).toFixed(1) : 0}h`;
+    let msg = `v12 | Avg: ${avgAll.toFixed(1)}h | Spread: ${spread.toFixed(1)} | Min: ${allH.length ? Math.min(...allH).toFixed(1) : 0}h | Max: ${allH.length ? Math.max(...allH).toFixed(1) : 0}h`;
     // Count total standby assigned (from per-session standbys)
     const totalStandby = Object.values(finalAssignments).flat().reduce((a, s) => a + s.standbys.length, 0);
     if (totalStandby > 0) msg += ` | ${totalStandby} standby (per-session)`;
     if (standbyCount > 0) msg += ` | ${standbyCount} unfilled`;
     if (violations.length > 0) {
       msg += ` | ${violations.length} violations (check console)`;
-      console.warn('[Distribution v11] Violations:', violations);
+      console.warn('[Distribution v12] Violations:', violations);
     } else {
-      console.log('[Distribution v11] All constraints passed!');
+      console.log('[Distribution v12] All constraints passed!');
     }
 
-    const newResults: DistributionResults = { _version: 11, assignments: finalAssignments, standbys, tracking };
+    const newResults: DistributionResults = { _version: 12, assignments: finalAssignments, standbys, tracking };
     setResults(newResults);
     fetch('/api/results', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: newResults }) });
     showToast(msg, standbyCount > 0 || violations.length > 0 ? 'error' : 'success');
@@ -1713,13 +1822,19 @@ setUserPermissions([]);
               <span style={{ color: 'var(--accent2)', fontWeight: 600 }}>Admin in Week 2 only</span>
               <span style={{ fontSize: 11, color: 'var(--text2)' }}>(peak days, last resort)</span>
             </label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, cursor: 'pointer', padding: '8px 12px', background: 'rgba(99,179,237,0.06)', borderRadius: 8, border: '1px solid rgba(99,179,237,0.15)' }}>
+              <input type="checkbox" id="rule-grading-pref" defaultChecked={false} style={{ width: 16, height: 16, accentColor: 'var(--accent3)' }} />
+              <span style={{ color: 'var(--accent3)', fontWeight: 600 }}>Grading preference (W2)</span>
+              <span style={{ fontSize: 11, color: 'var(--text2)' }}>(subject teachers → first session next day, max 3)</span>
+            </label>
             <div style={{ fontSize: 11, color: 'var(--text2)', lineHeight: 1.6, padding: '4px 0' }}>
               • Chronological day-by-day processing<br/>
               • MAX 2 committees per teacher per day (hard rule)<br/>
               • Admin = LAST resort, fewer hours than others<br/>
               • Hours balanced from actual assignments<br/>
               • No same grade on consecutive days<br/>
-              • No time overlap for same teacher
+              • No time overlap for same teacher<br/>
+              • Old teachers (notes: "old") → secondary only, paired with sec-note teacher
             </div>
           </div>
         </div>
@@ -2187,7 +2302,7 @@ setUserPermissions([]);
       <header>
         <div className="logo">
           <div className="logo-dot" />
-          EXAM · SUPERVISOR · EQUALIZER · v11
+          EXAM · SUPERVISOR · EQUALIZER · v12
         </div>
         <div className="header-actions">
           <span className="badge" style={{ background: `${roleColor}22`, color: roleColor }}>{roleLabel}</span>

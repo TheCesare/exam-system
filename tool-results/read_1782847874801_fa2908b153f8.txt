@@ -1,0 +1,2002 @@
+     1→'use client';
+     2→
+     3→export const dynamic = 'force-dynamic';
+     4→
+     5→import React, { useEffect, useState, useCallback, useRef } from 'react';
+     6→import { createClient, RealtimeChannel } from '@supabase/supabase-js';
+     7→import html2canvas from 'html2canvas';
+     8→import jsPDF from 'jspdf';
+     9→
+    10→// ========== CONSTANTS ==========
+    11→const WEEK1_DAYS = ['W1-Saturday','W1-Sunday','W1-Monday','W1-Tuesday','W1-Wednesday','W1-Thursday'];
+    12→const WEEK2_DAYS = ['W2-Saturday','W2-Sunday','W2-Monday','W2-Tuesday','W2-Wednesday','W2-Thursday'];
+    13→const DAYS = [...WEEK1_DAYS, ...WEEK2_DAYS];
+    14→const GRADES = [
+    15→  'Grade 3 Primary','Grade 4 Primary','Grade 5 Primary','Grade 6 Primary',
+    16→  'Grade 1 Prep','Grade 2 Prep','Grade 1 Secondary','Grade 2 Secondary'
+    17→];
+    18→const SUBJECTS = ['Math','Science','Arabic','English','French','Social Studies',
+    19→                  'Arts','Computer','Library','Religion','Psychology','Admin','Other'];
+    20→const DEFAULT_TIMES: Record<string,string> = {
+    21→  'Grade 3 Primary':'9:00-10:30','Grade 4 Primary':'9:00-10:30',
+    22→  'Grade 5 Primary':'9:00-10:30','Grade 6 Primary':'9:00-10:30',
+    23→  'Grade 1 Prep':'9:00-11:00','Grade 2 Prep':'9:00-11:00',
+    24→  'Grade 1 Secondary':'12:00-14:00','Grade 2 Secondary':'8:30-10:30'
+    25→};
+    26→
+    27→// ========== TYPES ==========
+    28→interface Teacher { id: string; name: string; subject: string; notes: string; }
+    29→interface ScheduleCell { id?: string; grade: string; day: string; committees: number; subject: string; time: string; }
+    30→interface TrackingEntry { totalComm: number; totalHours: number; dayComm: Record<string,number>; assignedSlots: {day:string;start:number;end:number}[]; gradeHistory: {dayIndex:number;grade:string}[]; }
+    31→interface CommitteeResult { serial: number; t1: {id:string|null;name:string}; t2: {id:string|null;name:string}; }
+    32→interface SessionResult { grade: string; time: string; subject: string; committees: CommitteeResult[]; standbys: StandbyEntry[]; }
+    33→interface StandbyEntry { id: string; name: string; }
+    34→interface DistributionResults {
+    35→  _version: number;
+    36→  assignments: Record<string, SessionResult[]>;
+    37→  standbys: Record<string, Record<string, StandbyEntry[]>>;
+    38→  tracking: Record<string, TrackingEntry>;
+    39→}
+    40→
+    41→type View = 'login' | 'user' | 'admin';
+    42→type Page = 'teachers' | 'schedule' | 'distribute' | 'results' | 'stats' | 'users' | 'log';
+    43→type LogView = 'admin' | 'users';
+    44→
+    45→// ========== HELPERS ==========
+    46→function parseTimeRange(tStr: string) {
+    47→  if (!tStr || !tStr.includes('-')) return { start: 540, end: 630, duration: 1.5 };
+    48→  try {
+    49→    let clean = tStr.replace(/\s+/g, '').replace(/—/g, '-').replace(/–/g, '-');
+    50→    const parts = clean.split('-');
+    51→    const toMinutes = (s: string) => { const p = s.split(':'); return (parseInt(p[0])||0)*60 + (parseInt(p[1])||0); };
+    52→    let start = toMinutes(parts[0]);
+    53→    let end = toMinutes(parts[1]);
+    54→    // Fix common 12h format issue: "1:00" should be "13:00" if start < 300 (before 5am) and end > start
+    55→    if (start < 300 && end > start + 120) start += 720;
+    56→    if (end <= start) end += 720;
+    57→    let duration = (end - start) / 60;
+    58→    // Sanity cap: no exam is longer than 5 hours
+    59→    if (duration > 5) duration = 2.0; // fallback to standard
+    60→    return { start, end, duration };
+    61→  } catch { return { start: 540, end: 630, duration: 1.5 }; }
+    62→}
+    63→
+    64→function getStage(grade: string) {
+    65→  const g = grade.toLowerCase();
+    66→  if (g.includes('primary')) return 'primary';
+    67→  if (g.includes('prep')) return 'prep';
+    68→  if (g.includes('secondary') || g.includes('sec')) return 'sec';
+    69→  return 'any';
+    70→}
+    71→
+    72→// ========== TOAST ==========
+    73→let toastTimer: ReturnType<typeof setTimeout> | null = null;
+    74→function showToast(msg: string, type: 'success' | 'error' | 'info' = 'info') {
+    75→  const el = document.getElementById('app-toast');
+    76→  if (!el) return;
+    77→  el.textContent = msg;
+    78→  el.className = 'toast show ' + type;
+    79→  if (toastTimer) clearTimeout(toastTimer);
+    80→  toastTimer = setTimeout(() => { el.className = 'toast'; }, 3000);
+    81→}
+    82→
+    83→// ========== MAIN COMPONENT ==========
+    84→export default function ExamSystem() {
+    85→  // Auth state
+    86→  const [view, setView] = useState<View>('login');
+    87→  const [password, setPassword] = useState('');
+    88→  const [loginError, setLoginError] = useState('');
+    89→  const [loginMode, setLoginMode] = useState<'user' | 'admin' | null>(null);
+    90→  const [showChangePassword, setShowChangePassword] = useState(false);
+    91→  const [showLoginPass, setShowLoginPass] = useState(false);
+    92→  const [showCurPass, setShowCurPass] = useState(false);
+    93→  const [showNewPass, setShowNewPass] = useState(false);
+    94→  const [showConfPass, setShowConfPass] = useState(false);
+    95→  const [currentPassword, setCurrentPassword] = useState('');
+    96→  const [newPassword, setNewPassword] = useState('');
+    97→  const [confirmPassword, setConfirmPassword] = useState('');
+    98→  const [changePassError, setChangePassError] = useState('');
+    99→  const [isConnected, setIsConnected] = useState(true);
+   100→  const [userCanEditTeachers, setUserCanEditTeachers] = useState(false);
+   101→  const [userPermissions, setUserPermissions] = useState<string[]>([]);
+   102→
+   103→  // Multi-user state
+   104→  const [supervisors, setSupervisors] = useState<{ id: string; name: string; permissions?: string[] }[]>([]);
+   105→  const [selectedSupervisor, setSelectedSupervisor] = useState('');
+   106→  const [currentUser, setCurrentUser] = useState('');
+   107→  const [auditLog, setAuditLog] = useState<{ id: string; timestamp: string; user: string; action: string; details: string }[]>([]);
+   108→  const [supFormName, setSupFormName] = useState('');
+   109→  const [supFormPass, setSupFormPass] = useState('');
+   110→  const [editingSupId, setEditingSupId] = useState<string | null>(null);
+   111→  const [changeSupPass, setChangeSupPass] = useState(false);
+   112→  const [supFormPermissions, setSupFormPermissions] = useState<string[]>([]);
+   113→
+   114→  // Data state
+   115→  const [teachers, setTeachers] = useState<Teacher[]>([]);
+   116→  const [teacherOrder, setTeacherOrder] = useState<string[]>([]); // explicit order
+   117→  const [schedule, setSchedule] = useState<ScheduleCell[]>([]);
+   118→  const [results, setResults] = useState<DistributionResults | null>(null);
+   119→
+   120→  // UI state
+   121→  const [activePage, setActivePage] = useState<Page>('teachers');
+   122→  const [showAddTeacher, setShowAddTeacher] = useState(false);
+   123→  const [editTeacherId, setEditTeacherId] = useState<string | null>(null);
+   124→  const [formName, setFormName] = useState('');
+   125→  const [formSubject, setFormSubject] = useState('');
+   126→  const [formNotes, setFormNotes] = useState('');
+   127→  const [loading, setLoading] = useState(true);
+   128→
+   129→  // Schedule edit buffer (local edits before saving)
+   130→  const [scheduleBuffer, setScheduleBuffer] = useState<Record<string, ScheduleCell>>({});
+   131→
+   132→  // Log sub-page state
+   133→  const [logView, setLogView] = useState<LogView>('admin');
+   134→
+   135→  // Ref for Supabase realtime channels
+   136→  const channelsRef = useRef<RealtimeChannel[]>([]);
+   137→
+   138→  // ========== HELPER: Log audit action ==========
+   139→  const logAudit = useCallback(async (action: string, details: string) => {
+   140→    if (!currentUser) return;
+   141→    try {
+   142→      fetch('/api/audit', {
+   143→        method: 'POST',
+   144→        headers: { 'Content-Type': 'application/json' },
+   145→        body: JSON.stringify({ user: currentUser, action, details })
+   146→      });
+   147→    } catch { /* silent */ }
+   148→  }, [currentUser]);
+   149→
+   150→  // ========== LOAD SUPERVISORS (for login dropdown) ==========
+   151→  const loadSupervisors = useCallback(async () => {
+   152→    try {
+   153→      const res = await fetch('/api/supervisors');
+   154→      if (res.ok) setSupervisors(await res.json());
+   155→    } catch { /* silent */ }
+   156→  }, []);
+   157→
+   158→  // ========== LOAD AUDIT LOG ==========
+   159→  const loadAuditLog = useCallback(async () => {
+   160→    try {
+   161→      const res = await fetch('/api/audit');
+   162→      if (res.ok) setAuditLog(await res.json());
+   163→    } catch { /* silent */ }
+   164→  }, []);
+   165→
+   166→  // ========== HELPER: Save teacher order to settings ==========
+   167→  const saveTeacherOrder = async (ids: string[]) => {
+   168→    try {
+   169→      const res = await fetch('/api/settings');
+   170→      if (res.ok) {
+   171→        const current = await res.json();
+   172→        await fetch('/api/settings', {
+   173→          method: 'PUT',
+   174→          headers: { 'Content-Type': 'application/json' },
+   175→          body: JSON.stringify({ ...current, teacher_order: ids })
+   176→        });
+   177→      }
+   178→    } catch { /* silent */ }
+   179→  };
+   180→
+   181→  // ========== LOAD SETTINGS ==========
+   182→  const loadSettings = useCallback(async () => {
+   183→    try {
+   184→      const res = await fetch('/api/settings');
+   185→      if (res.ok) {
+   186→        const data = await res.json();
+   187→        setUserCanEditTeachers(!!data.user_can_edit_teachers);
+   188→        if (data.teacher_order && Array.isArray(data.teacher_order)) {
+   189→          setTeacherOrder(data.teacher_order);
+   190→          return data.teacher_order;
+   191→        }
+   192→      }
+   193→    } catch { /* silent */ }
+   194→    return [];
+   195→  }, []);
+   196→
+   197→  // ========== LOAD DATA ==========
+   198→  const sortTeachersByOrder = useCallback((list: Teacher[], order: string[]): Teacher[] => {
+   199→    if (!order || order.length === 0) return list;
+   200→    const orderMap = new Map<string, number>();
+   201→    order.forEach((id, idx) => orderMap.set(id, idx));
+   202→    const maxOrder = order.length;
+   203→    return [...list].sort((a, b) => {
+   204→      const aIdx = orderMap.has(a.id) ? orderMap.get(a.id)! : maxOrder;
+   205→      const bIdx = orderMap.has(b.id) ? orderMap.get(b.id)! : maxOrder;
+   206→      if (aIdx !== bIdx) return aIdx - bIdx;
+   207→      return 0;
+   208→    });
+   209→  }, []);
+   210→
+   211→  const loadTeachers = useCallback(async (forcedOrder?: string[]) => {
+   212→    try {
+   213→      const res = await fetch('/api/teachers');
+   214→      if (res.ok) {
+   215→        const raw: Teacher[] = await res.json();
+   216→        // Use forced order (from settings load) or current state
+   217→        const order = forcedOrder || teacherOrder;
+   218→        const sorted = sortTeachersByOrder(raw, order);
+   219→        setTeachers(sorted);
+   220→        // If no saved order yet, initialize from current data
+   221→        if (order.length === 0 && raw.length > 0) {
+   222→          const ids = raw.map(t => t.id);
+   223→          setTeacherOrder(ids);
+   224→          saveTeacherOrder(ids);
+   225→        }
+   226→      }
+   227→    } catch { /* silent */ }
+   228→  }, [teacherOrder, sortTeachersByOrder]);
+   229→
+   230→  const loadSchedule = useCallback(async () => {
+   231→    try {
+   232→      const res = await fetch('/api/schedule');
+   233→      if (res.ok) {
+   234→        const data: ScheduleCell[] = await res.json();
+   235→        setSchedule(data);
+   236→        const buf: Record<string, ScheduleCell> = {};
+   237→        data.forEach(c => { buf[`${c.grade}__${c.day}`] = c; });
+   238→        setScheduleBuffer(buf);
+   239→      }
+   240→    } catch { /* silent */ }
+   241→  }, []);
+   242→
+   243→  const loadResults = useCallback(async () => {
+   244→    try {
+   245→      const res = await fetch('/api/results');
+   246→      if (res.ok) {
+   247→        const data = await res.json();
+   248→        if (data && data.data) {
+   249→          const d = data.data;
+   250→          // v6+ results must have _version >= 6. Old results → discard.
+   251→          if (!d._version || d._version < 11) {
+   252→            await fetch('/api/results', { method: 'DELETE' });
+   253→            setResults(null);
+   254→          } else {
+   255→            setResults(d);
+   256→          }
+   257→        }
+   258→      }
+   259→    } catch { /* silent */ }
+   260→  }, []);
+   261→
+   262→  const loadAll = useCallback(async () => {
+   263→    setLoading(true);
+   264→    try {
+   265→      const order = await loadSettings();
+   266→      await Promise.all([loadTeachers(order.length > 0 ? order : undefined), loadSchedule(), loadResults()]);
+   267→    } catch { /* silent */ }
+   268→    finally { setLoading(false); }
+   269→  }, [loadTeachers, loadSchedule, loadResults, loadSettings]);
+   270→
+   271→  // ========== INIT: Load supervisors on mount (for login dropdown) ==========
+   272→  useEffect(() => {
+   273→    loadSupervisors();
+   274→  }, [loadSupervisors]);
+   275→
+   276→  // ========== INIT: Auto-login from session ==========
+   277→  useEffect(() => {
+   278→    const saved = sessionStorage.getItem('exam_auth');
+   279→    if (saved) {
+   280→      try {
+   281→        const { role, name, permissions } = JSON.parse(saved);
+   282→        setView(role);
+   283→        setCurrentUser(name || 'Admin');
+   284→        if (permissions) setUserPermissions(permissions);
+   285→        loadAll();
+   286→        if (role === 'admin') { loadSupervisors(); loadAuditLog(); }
+   287→        else { loadSupervisors(); }
+   288→      } catch { /* ignore bad session */ }
+   289→    }
+   290→    // eslint-disable-next-line react-hooks/exhaustive-deps
+   291→  }, []);
+   292→
+   293→  // ========== SUPABASE REALTIME ==========
+   294→  useEffect(() => {
+   295→    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+   296→    const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+   297→    if (!supabaseUrl || !supabaseKey) return;
+   298→
+   299→    const sb = createClient(supabaseUrl, supabaseKey);
+   300→
+   301→    const teachersCh = sb.channel('teachers-changes')
+   302→      .on('postgres_changes', { event: '*', schema: 'public', table: 'teachers' }, () => {
+   303→        loadTeachers();
+   304→      })
+   305→      .subscribe((status) => {
+   306→        setIsConnected(status === 'SUBSCRIBED');
+   307→      });
+   308→
+   309→    const scheduleCh = sb.channel('schedule-changes')
+   310→      .on('postgres_changes', { event: '*', schema: 'public', table: 'schedule_cells' }, () => {
+   311→        loadSchedule();
+   312→      })
+   313→      .subscribe();
+   314→
+   315→    const resultsCh = sb.channel('results-changes')
+   316→      .on('postgres_changes', { event: '*', schema: 'public', table: 'distribution_results' }, () => {
+   317→        loadResults();
+   318→      })
+   319→      .subscribe();
+   320→
+   321→    channelsRef.current = [teachersCh, scheduleCh, resultsCh];
+   322→
+   323→    return () => {
+   324→      teachersCh.unsubscribe();
+   325→      scheduleCh.unsubscribe();
+   326→      resultsCh.unsubscribe();
+   327→    };
+   328→  }, [loadTeachers, loadSchedule, loadResults]);
+   329→
+   330→  const toggleUserEditPermission = async (val: boolean) => {
+   331→    try {
+   332→      await fetch('/api/settings', {
+   333→        method: 'PUT',
+   334→        headers: { 'Content-Type': 'application/json' },
+   335→        body: JSON.stringify({ user_can_edit_teachers: val })
+   336→      });
+   337→      setUserCanEditTeachers(val);
+   338→      showToast(val ? 'User edit permission enabled' : 'User edit permission disabled', 'info');
+   339→    } catch { showToast('Error updating settings', 'error'); }
+   340→  };
+   341→
+   342→  // ========== AUTH ==========
+   343→  const handleLogin = async (role: 'user' | 'admin') => {
+   344→    if (role === 'user' && !selectedSupervisor.trim()) { setLoginError('Please enter your username'); return; }
+   345→    if (!password.trim()) { setLoginError('Please enter the password'); return; }
+   346→    try {
+   347→      const res = await fetch('/api/auth', {
+   348→        method: 'POST',
+   349→        headers: { 'Content-Type': 'application/json' },
+   350→        body: JSON.stringify({ password, role, name: role === 'user' ? selectedSupervisor.trim() : undefined })
+   351→      });
+   352→      const data = await res.json();
+   353→      if (data.success) {
+   354→        const userName = role === 'user' ? (data.name || selectedSupervisor) : 'Admin';
+   355→        const perms = data.permissions || [];
+   356→        setCurrentUser(userName);
+   357→        setView(data.role);
+   358→        setUserPermissions(perms);
+   359→        sessionStorage.setItem('exam_auth', JSON.stringify({ role: data.role, name: userName, permissions: perms }));
+   360→        loadAll();
+   361→        loadSettings();
+   362→        if (role === 'admin') { loadSupervisors(); loadAuditLog(); }
+   363→        else { loadSupervisors(); }
+   364→      } else {
+   365→        setLoginError(data.message || 'Wrong password');
+   366→      }
+   367→    } catch { setLoginError('Connection error'); }
+   368→  };
+   369→
+   370→  const handleChangePassword = async () => {
+   371→    if (!currentPassword || !newPassword || !confirmPassword) {
+   372→      setChangePassError('Please fill all fields'); return;
+   373→    }
+   374→    if (newPassword.length < 4) {
+   375→      setChangePassError('Password must be at least 4 characters'); return;
+   376→    }
+   377→    if (newPassword !== confirmPassword) {
+   378→      setChangePassError('New password and confirmation do not match'); return;
+   379→    }
+   380→    try {
+   381→      // First verify current password
+   382→      const verifyRes = await fetch('/api/auth', {
+   383→        method: 'POST',
+   384→        headers: { 'Content-Type': 'application/json' },
+   385→        body: JSON.stringify({ password: currentPassword, role: 'user', name: currentUser })
+   386→      });
+   387→      const verifyData = await verifyRes.json();
+   388→      if (!verifyData.success) {
+   389→        setChangePassError('Current password is wrong'); return;
+   390→      }
+   391→      // Update password
+   392→      const updateRes = await fetch('/api/supervisors', {
+   393→        method: 'PUT',
+   394→        headers: { 'Content-Type': 'application/json' },
+   395→        body: JSON.stringify({ name: currentUser, newPassword })
+   396→      });
+   397→      const updateData = await updateRes.json();
+   398→      if (updateData.success) {
+   399→        showToast('Password updated successfully', 'success');
+   400→        setShowChangePassword(false);
+   401→        setCurrentPassword('');
+   402→        setNewPassword('');
+   403→        setConfirmPassword('');
+   404→        setChangePassError('');
+   405→      } else {
+   406→        setChangePassError('Failed to update password');
+   407→      }
+   408→    } catch {
+   409→      setChangePassError('Connection error');
+   410→    }
+   411→  };
+   412→
+   413→  const handleLogout = () => {
+   414→    setView('login');
+   415→    setPassword('');
+   416→    setLoginError('');
+   417→    setLoginMode(null);
+   418→    setSelectedSupervisor('');
+   419→    setCurrentUser('');
+   420→    setTeachers([]);
+   421→    setSchedule([]);
+   422→    setResults(null);
+   423→    setUserCanEditTeachers(false);
+   424→setUserPermissions([]);
+   425→    setShowChangePassword(false);
+   426→  };
+   427→
+   428→  // ========== TEACHER ACTIONS ==========
+   429→
+   430→  const deleteTeacher = async (id: string) => {
+   431→    if (!isAdmin) { showToast('Delete is admin only', 'error'); return; }
+   432→    const tch = teachers.find(t => t.id === id);
+   433→    if (!confirm('Delete this teacher?')) return;
+   434→    try {
+   435→      await fetch(`/api/teachers?id=${id}`, { method: 'DELETE' });
+   436→      const newOrder = teacherOrder.filter(tid => tid !== id);
+   437→      setTeacherOrder(newOrder);
+   438→      saveTeacherOrder(newOrder);
+   439→      loadTeachers();
+   440→      logAudit('teacher_deleted', `Deleted: ${tch?.name || id} (${tch?.subject || ''})`);
+   441→      showToast('Teacher deleted', 'success');
+   442→    } catch { showToast('Error deleting', 'error'); }
+   443→  };
+   444→
+   445→  const startEdit = (t: Teacher) => {
+   446→    if (!canEdit) { showToast('No edit permission - ask admin', 'error'); return; }
+   447→    setEditTeacherId(t.id);
+   448→    setFormName(t.name);
+   449→    setFormSubject(t.subject);
+   450→    setFormNotes(t.notes);
+   451→  };
+   452→
+   453→  const inlineSave = async (id: string) => {
+   454→    if (!formName.trim() || !formSubject) { showToast('Please complete all fields', 'error'); return; }
+   455→    try {
+   456→      await fetch('/api/teachers', {
+   457→        method: 'PUT',
+   458→        headers: { 'Content-Type': 'application/json' },
+   459→        body: JSON.stringify({ id, name: formName.trim(), subject: formSubject, notes: formNotes.trim() })
+   460→      });
+   461→      logAudit('teacher_edited', `Edited: ${formName.trim()} (${formSubject})`);
+   462→      showToast('Teacher updated', 'success');
+   463→      setEditTeacherId(null);
+   464→      loadTeachers();
+   465→    } catch { showToast('Error saving teacher', 'error'); }
+   466→  };
+   467→
+   468→  const saveTeacher = async () => {
+   469→    if (!formName.trim() || !formSubject) { showToast('Please complete all fields', 'error'); return; }
+   470→    if (!canEdit) { showToast('No permission - ask admin', 'error'); return; }
+   471→    try {
+   472→      if (editTeacherId) {
+   473→        await fetch('/api/teachers', {
+   474→          method: 'PUT',
+   475→          headers: { 'Content-Type': 'application/json' },
+   476→          body: JSON.stringify({ id: editTeacherId, name: formName.trim(), subject: formSubject, notes: formNotes.trim() })
+   477→        });
+   478→        logAudit('teacher_edited', `Edited: ${formName.trim()} (${formSubject})`);
+   479→        showToast('Teacher updated', 'success');
+   480→      } else {
+   481→        const res = await fetch('/api/teachers', {
+   482→          method: 'POST',
+   483→          headers: { 'Content-Type': 'application/json' },
+   484→          body: JSON.stringify({ name: formName.trim(), subject: formSubject, notes: formNotes.trim() })
+   485→        });
+   486→        if (res.ok) {
+   487→          const newTeacher = await res.json();
+   488→          const newOrder = [...teacherOrder, newTeacher.id];
+   489→          setTeacherOrder(newOrder);
+   490→          saveTeacherOrder(newOrder);
+   491→        }
+   492→        logAudit('teacher_added', `Added: ${formName.trim()} (${formSubject})`);
+   493→        showToast('Teacher added successfully', 'success');
+   494→      }
+   495→      cancelEdit();
+   496→      loadTeachers();
+   497→    } catch { showToast('Error saving teacher', 'error'); }
+   498→  };
+   499→
+   500→  const cancelEdit = () => {
+   501→    setEditTeacherId(null);
+   502→    setFormName('');
+   503→    setFormSubject('');
+   504→    setFormNotes('');
+   505→    setShowAddTeacher(false);
+   506→  };
+   507→
+   508→  const cancelAddForm = () => {
+   509→    setFormName('');
+   510→    setFormSubject('');
+   511→    setFormNotes('');
+   512→    setShowAddTeacher(false);
+   513→  };
+   514→
+   515→  const generateDemoTeachers = async () => {
+   516→    const demoTeachers: { name: string; subject: string; notes: string }[] = [];
+   517→    let count = 1;
+   518→    for (let i = 1; i <= 15; i++) {
+   519→      demoTeachers.push({ name: `Math Specialist Expert T${count++}`, subject: 'Math', notes: i <= 9 ? 'prep, sec' : '' });
+   520→    }
+   521→    for (let i = 1; i <= 45; i++) demoTeachers.push({ name: `English Senior Faculty T${count++}`, subject: 'English', notes: '' });
+   522→    for (let i = 1; i <= 40; i++) demoTeachers.push({ name: `Arabic Lang Professor T${count++}`, subject: 'Arabic', notes: i <= 16 ? 'prep, sec' : '' });
+   523→    for (let i = 1; i <= 9; i++) demoTeachers.push({ name: `French Educator Staff T${count++}`, subject: 'French', notes: '' });
+   524→    for (let i = 1; i <= 8; i++) demoTeachers.push({ name: `Social Studies Instructor T${count++}`, subject: 'Social Studies', notes: i === 1 ? 'prep, sec' : '' });
+   525→    for (let i = 1; i <= 9; i++) demoTeachers.push({ name: `Pure Science Research T${count++}`, subject: 'Science', notes: '' });
+   526→    const otherSubs = ['Arts', 'Computer', 'Library', 'Religion', 'Psychology', 'Admin', 'Other'];
+   527→    for (let i = 1; i <= 74; i++) {
+   528→      demoTeachers.push({ name: `${otherSubs[i % otherSubs.length]} Resource Officer T${count++}`, subject: otherSubs[i % otherSubs.length], notes: '' });
+   529→    }
+   530→    try {
+   531→      await fetch('/api/distribute', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ teachers: demoTeachers }) });
+   532→      // Reset order - will be re-initialized from fresh data
+   533→      setTeacherOrder([]);
+   534→      loadTeachers();
+   535→      showToast('Injected 200 Mock Teachers Successfully!', 'success');
+   536→    } catch { showToast('Error', 'error'); }
+   537→  };
+   538→
+   539→  const importCSV = () => {
+   540→    const input = document.createElement('input');
+   541→    input.type = 'file'; input.accept = '.csv';
+   542→    input.onchange = async (e) => {
+   543→      const file = (e.target as HTMLInputElement).files?.[0];
+   544→      if (!file) return;
+   545→      const text = await file.text();
+   546→      const lines = text.split('\n');
+   547→      const imported: { name: string; subject: string; notes: string }[] = [];
+   548→      lines.forEach(line => {
+   549→        const parts = line.split(',').map(p => p.trim());
+   550→        if (parts.length >= 2 && parts[0]) imported.push({ name: parts[0], subject: parts[1], notes: parts[2] || '' });
+   551→      });
+   552→      if (imported.length === 0) { showToast('No valid data in CSV', 'error'); return; }
+   553→      try {
+   554→        await fetch('/api/distribute', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ teachers: imported }) });
+   555→        // Reset order - will be re-initialized from fresh data
+   556→        setTeacherOrder([]);
+   557→        loadTeachers();
+   558→        showToast(`Imported ${imported.length} teachers`, 'success');
+   559→      } catch { showToast('Import error', 'error'); }
+   560→    };
+   561→    input.click();
+   562→  };
+   563→
+   564→  // ========== SCHEDULE ACTIONS ==========
+   565→  const updateCell = (grade: string, day: string, field: 'committees' | 'subject' | 'time', value: string | number) => {
+   566→    const key = `${grade}__${day}`;
+   567→    setScheduleBuffer(prev => ({
+   568→      ...prev,
+   569→      [key]: { ...prev[key], grade, day, [field]: value, id: prev[key]?.id }
+   570→    }));
+   571→  };
+   572→
+   573→  const saveSchedule = async () => {
+   574→    const cells = Object.values(scheduleBuffer);
+   575→    try {
+   576→      await fetch('/api/schedule', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(cells) });
+   577→      showToast('Schedule saved!', 'success');
+   578→      logAudit('schedule_saved', 'Updated exam schedule blueprint');
+   579→      loadSchedule();
+   580→    } catch { showToast('Error saving schedule', 'error'); }
+   581→  };
+   582→
+   583→  const resetSchedule = async () => {
+   584→    if (!confirm('Reset schedule?')) return;
+   585→    setScheduleBuffer({});
+   586→    try {
+   587→      await fetch('/api/schedule', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify([]) });
+   588→      loadSchedule();
+   589→      showToast('Schedule reset', 'info');
+   590→      logAudit('schedule_reset', 'Cleared all schedule data');
+   591→    } catch { /* silent */ }
+   592→  };
+   593→
+   594→  // ========== DISTRIBUTION ENGINE v4 ==========
+   595→  const runDistribution = () => {
+   596→    if (teachers.length === 0) { showToast('Error: Registry empty!', 'error'); return; }
+   597→
+   598→    const ruleSubject = (document.getElementById('rule-subject') as HTMLInputElement)?.checked ?? true;
+   599→    const ruleDayLimit = (document.getElementById('rule-daylimit') as HTMLInputElement)?.checked ?? true;
+   600→    const ruleNotes = (document.getElementById('rule-notes') as HTMLInputElement)?.checked ?? true;
+   601→    const includeAdminW2 = (document.getElementById('rule-admin-w2') as HTMLInputElement)?.checked ?? false;
+   602→
+   603→    // ---- Admin handling: Admin subject excluded by default, included only for W2 peak days ----
+   604→
+   605→    // ---- Initialize tracking ----
+   606→    const tracking: Record<string, TrackingEntry> = {};
+   607→    teachers.forEach(t => {
+   608→      tracking[t.id] = { totalComm: 0, totalHours: 0, dayComm: {} as Record<string,number>, assignedSlots: [], gradeHistory: [] };
+   609→      DAYS.forEach(d => { tracking[t.id].dayComm[d] = 0; });
+   610→    });
+   611→
+   612→    // ---- Build exam slots grouped by day (chronological order) ----
+   613→    type Slot = { day: string; dayIndex: number; grade: string; stage: string; subject: string; time: string; timeInfo: ReturnType<typeof parseTimeRange>; comId: number };
+   614→    const slotsByDay: Record<string, Slot[]> = {};
+   615→    DAYS.forEach((d, i) => { slotsByDay[d] = []; });
+   616→    DAYS.forEach((day, dayIndex) => {
+   617→      GRADES.forEach(grade => {
+   618→        const cell = scheduleBuffer[`${grade}__${day}`];
+   619→        if (cell && cell.committees > 0) {
+   620→          const timeInfo = parseTimeRange(cell.time || DEFAULT_TIMES[grade] || '9:00-10:30');
+   621→          for (let c = 1; c <= cell.committees; c++) {
+   622→            slotsByDay[day].push({ day, dayIndex, grade, stage: getStage(grade), subject: cell.subject || '', time: cell.time || DEFAULT_TIMES[grade] || '9:00-10:30', timeInfo, comId: c });
+   623→          }
+   624→        }
+   625→      });
+   626→    });
+   627→
+   628→    // ---- Build final assignments structure ----
+   629→    const finalAssignments: Record<string, SessionResult[]> = {};
+   630→    DAYS.forEach(d => { finalAssignments[d] = []; });
+   631→    DAYS.forEach(day => {
+   632→      GRADES.forEach(grade => {
+   633→        const cell = scheduleBuffer[`${grade}__${day}`];
+   634→        if (cell && cell.committees > 0) {
+   635→          const existing = finalAssignments[day].find(s => s.grade === grade && s.time === (cell.time || DEFAULT_TIMES[grade]));
+   636→          if (!existing) {
+   637→            finalAssignments[day].push({ grade, time: cell.time || DEFAULT_TIMES[grade] || '', subject: cell.subject || '', committees: [], standbys: [] });
+   638→          }
+   639→        }
+   640→      });
+   641→    });
+   642→
+   643→    // ---- Helper: Stage notes — HARD constraint ----
+   644→    const canSuperviseStage = (teacher: Teacher, slotStage: string): boolean => {
+   645→      if (!ruleNotes) return true;
+   646→      if (!teacher.notes || teacher.notes.trim() === '') return true;
+   647→      const n = teacher.notes.toLowerCase();
+   648→      const allowed: string[] = [];
+   649→      if (/\b(primary|pri)\b/i.test(n) || n.includes('\u0627\u0628\u062a\u062f\u0627\u0626\u064a')) allowed.push('primary');
+   650→      if (/\bprep\b/i.test(n) || n.includes('\u0627\u0639\u062f\u0627\u062f\u064a')) allowed.push('prep');
+   651→      if (/\b(secondary|sec)\b/i.test(n) || n.includes('\u062b\u0627\u0646\u0648\u064a')) allowed.push('sec');
+   652→      if (allowed.length === 0) return true;
+   653→      return allowed.includes(slotStage);
+   654→    };
+   655→
+   656→    // ---- Helper: Consecutive-day same-grade check ----
+   657→    const wasSameGradeAdjacent = (tr: TrackingEntry, slot: Slot): boolean => {
+   658→      return tr.gradeHistory.some(h => Math.abs(h.dayIndex - slot.dayIndex) === 1 && h.grade === slot.grade);
+   659→    };
+   660→
+   661→    // ---- Helper: Special subject pairing rules ----
+   662→    // Religion exam: Arabic + Religion teachers blocked
+   663→    // Arabic exam: Religion teachers blocked from primary only
+   664→    const isBlockedBySpecialRule = (teacher: Teacher, slot: Slot): boolean => {
+   665→      if (slot.subject === 'Religion' && (teacher.subject === 'Arabic' || teacher.subject === 'Religion')) return true;
+   666→      if (slot.subject === 'Arabic' && teacher.subject === 'Religion' && slot.stage === 'primary') return true;
+   667→      return false;
+   668→    };
+   669→
+   670→    // ---- Helper: Fisher-Yates shuffle ----
+   671→    const shuffle = <T,>(arr: T[]): T[] => {
+   672→      const a = [...arr];
+   673→      for (let i = a.length - 1; i > 0; i--) {
+   674→        const j = Math.floor(Math.random() * (i + 1));
+   675→        [a[i], a[j]] = [a[j], a[i]];
+   676→      }
+   677→      return a;
+   678→    };
+   679→
+   680→    // ---- Helper: Special subject exclusion rules (Religion/Arabic) ----
+   681→    // Rule 1: If exam subject is Religion (الدين), teachers with subject Arabic (العربي) are excluded (Religion teachers already caught by own-subject)
+   682→    // Rule 2: If exam subject is Arabic (العربي), teachers with subject Religion (الدين) are excluded for primary stage only
+   683→    const isSubjectExcluded = (t: Teacher, slot: Slot): boolean => {
+   684→      if (!ruleSubject || !slot.subject) return false;
+   685→      if (slot.subject === 'الدين') {
+   686→        return t.subject === 'العربي';
+   687→      }
+   688→      if (slot.subject === 'العربي' && slot.stage === 'primary') {
+   689→        return t.subject === 'الدين';
+   690→      }
+   691→      return false;
+   692→    };
+   693→
+   694→    // ---- Core: Find best teacher for a slot ----
+   695→    // HARD RULES: own-subject, stage notes, NO same-day double, time overlap
+   696→    // Scoring: hours dominate (500x), tiny noise (0.1) for variety
+   697→    const findBest = (
+   698→      blockedId: string | null,
+   699→      slot: Slot,
+   700→      pool: Teacher[],
+   701→      relaxAdj: boolean
+   702→    ): Teacher | null => {
+   703→      const candidates: { teacher: Teacher; score: number }[] = [];
+   704→      for (const t of pool) {
+   705→        if (blockedId && t.id === blockedId) continue;
+   706→        const tr = tracking[t.id];
+   707→        // HARD: No own-subject supervision
+   708→        if (ruleSubject && slot.subject && t.subject === slot.subject) continue;
+   709→        // HARD: Special subject exclusion (Religion/Arabic rules)
+   710→        if (isSubjectExcluded(t, slot)) continue;
+   711→        // HARD: Stage notes filtering
+   712→        if (!canSuperviseStage(t, slot.stage)) continue;
+   713→        // HARD: No time overlap on same day
+   714→        if (tr.assignedSlots.some(s => s.day === slot.day && !(slot.timeInfo.end <= s.start || slot.timeInfo.start >= s.end))) continue;
+   715→        // HARD: MAX 2 committees per teacher per day (NEVER relaxed)
+   716→        if (ruleDayLimit && tr.dayComm[slot.day] >= 2) continue;
+   717→        // SOFT: No same grade on consecutive days (can be relaxed)
+   718→        if (!relaxAdj && wasSameGradeAdjacent(tr, slot)) continue;
+   719→        // Scoring: HOURS dominate (500x), then committees (10x), tiny noise for variety
+   720→        // Admin subject = HEAVY penalty (always last choice)
+   721→        const isAdmin = t.subject === 'Admin';
+   722→        const adminPenalty = isAdmin ? 50000 : 0;
+   723→        const score = tr.totalHours * 500 + tr.totalComm * 10 + adminPenalty + Math.random() * 0.1;
+   724→        candidates.push({ teacher: t, score });
+   725→      }
+   726→      if (candidates.length === 0) return null;
+   727→      candidates.sort((a, b) => a.score - b.score);
+   728→      const best = candidates[0].score;
+   729→      const topGroup = candidates.filter(c => c.score <= best + 0.5);
+   730→      return topGroup[Math.floor(Math.random() * topGroup.length)].teacher;
+   731→    };
+   732→
+   733→    // ---- Fallback 2: Relax stage constraints only (keep own-subject, 2-per-day + time) ----
+   734→    const findBestRelaxed = (blockedId: string | null, slot: Slot, pool: Teacher[]): Teacher | null => {
+   735→      const candidates: { teacher: Teacher; score: number }[] = [];
+   736→      for (const t of pool) {
+   737→        if (blockedId && t.id === blockedId) continue;
+   738→        const tr = tracking[t.id];
+   739→        // HARD: Still no own-subject supervision even in relaxed mode
+   740→        if (ruleSubject && slot.subject && t.subject === slot.subject) continue;
+   741→        // HARD: Special subject exclusion (Religion/Arabic rules) — never relaxed
+   742→        if (isSubjectExcluded(t, slot)) continue;
+   743→        if (tr.assignedSlots.some(s => s.day === slot.day && !(slot.timeInfo.end <= s.start || slot.timeInfo.start >= s.end))) continue;
+   744→        if (ruleDayLimit && tr.dayComm[slot.day] >= 2) continue;
+   745→        const isAdmin = t.subject === 'Admin';
+   746→        const adminPenalty = isAdmin ? 50000 : 0;
+   747→        const score = tr.totalHours * 500 + tr.totalComm * 10 + adminPenalty + Math.random() * 0.1;
+   748→        candidates.push({ teacher: t, score });
+   749→      }
+   750→      if (candidates.length === 0) return null;
+   751→      candidates.sort((a, b) => a.score - b.score);
+   752→      return candidates[0].teacher;
+   753→    };
+   754→
+   755→    // ---- Fallback 3: Allow 2nd assignment same day (time overlap + own-subject + max 2/day blocked) ----
+   756→    const findBestForceDay = (blockedId: string | null, slot: Slot, pool: Teacher[]): Teacher | null => {
+   757→      const candidates: { teacher: Teacher; score: number }[] = [];
+   758→      for (const t of pool) {
+   759→        if (blockedId && t.id === blockedId) continue;
+   760→        const tr = tracking[t.id];
+   761→        // HARD: Still no own-subject supervision even in force-day mode
+   762→        if (ruleSubject && slot.subject && t.subject === slot.subject) continue;
+   763→        // HARD: Special subject exclusion (Religion/Arabic rules) — never relaxed
+   764→        if (isSubjectExcluded(t, slot)) continue;
+   765→        if (tr.assignedSlots.some(s => s.day === slot.day && !(slot.timeInfo.end <= s.start || slot.timeInfo.start >= s.end))) continue;
+   766→        // HARD: ABSOLUTE MAX 2 committees per teacher per day (never exceeded)
+   767→        if (ruleDayLimit && tr.dayComm[slot.day] >= 2) continue;
+   768→        const isAdmin = t.subject === 'Admin';
+   769→        const adminPenalty = isAdmin ? 50000 : 0;
+   770→        const score = tr.totalHours * 500 + tr.totalComm * 10 + (tr.dayComm[slot.day] || 0) * 100 + adminPenalty + Math.random() * 0.1;
+   771→        candidates.push({ teacher: t, score });
+   772→      }
+   773→      if (candidates.length === 0) return null;
+   774→      candidates.sort((a, b) => a.score - b.score);
+   775→      return candidates[0].teacher;
+   776→    };
+   777→
+   778→    // ---- Process each day chronologically, shuffle slots within day for variety ----
+   779→    let standbyCount = 0;
+   780→
+   781→    // ---- 'Old' teacher handling: senior teachers excluded from default pool, used as last resort ----
+   782→    const isOldTeacher = (t: Teacher) => !!(t.notes && t.notes.toLowerCase().includes('old'));
+   783→    const oldTeachers = teachers.filter(t => t.subject !== 'Admin' && isOldTeacher(t));
+   784→    const nonAdminTeachers = teachers.filter(t => t.subject !== 'Admin' && !isOldTeacher(t));
+   785→
+   786→    // Track old teacher supervision days (max 3, min 1)
+   787→    const oldTeacherDays: Record<string, number> = {};
+   788→    oldTeachers.forEach(t => { oldTeacherDays[t.id] = 0; });
+   789→
+   790→    // Calculate Week 2 peak days (days with above-average committee count)
+   791→    const w2SlotCounts = WEEK2_DAYS.map(d => slotsByDay[d].length).filter(c => c > 0);
+   792→    const w2Avg = w2SlotCounts.length > 0 ? w2SlotCounts.reduce((a, b) => a + b, 0) / w2SlotCounts.length : 0;
+   793→    const peakW2Days = new Set(WEEK2_DAYS.filter(d => slotsByDay[d].length >= w2Avg && slotsByDay[d].length > 0));
+   794→
+   795→    for (const day of DAYS) {
+   796→      // Determine pool: Admin only included on W2 peak days when toggle is ON
+   797→      const isW2Peak = WEEK2_DAYS.includes(day) && peakW2Days.has(day);
+   798→      const dayPool = (includeAdminW2 && isW2Peak) ? [...teachers] : nonAdminTeachers;
+   799→      const daySlots = shuffle(slotsByDay[day]);
+   800→      if (daySlots.length === 0) continue;
+   801→
+   802→      for (const slot of daySlots) {
+   803→        let t1: Teacher | null = null;
+   804→        let t2: Teacher | null = null;
+   805→
+   806→        // Helper: filter old teachers not exceeding 3-day max and not already assigned today
+   807→        const availableOldTeachers = (blockedId: string | null, day: string) => {
+   808→          return oldTeachers.filter(ot => {
+   809→            if (blockedId && ot.id === blockedId) return false;
+   810→            if ((oldTeacherDays[ot.id] || 0) >= 3) return false;
+   811→            const tr = tracking[ot.id];
+   812→            if (tr.assignedSlots.some(s => s.day === day && !(slot.timeInfo.end <= s.start || slot.timeInfo.start >= s.end))) return false;
+   813→            return true;
+   814→          });
+   815→        };
+   816→
+   817→        // T1: strict → relax consecutive → relax subject+stage → allow 2nd same-day → OLD teacher last resort
+   818→        t1 = findBest(null, slot, dayPool, false);
+   819→        if (!t1) t1 = findBest(null, slot, dayPool, true); // relax consecutive-day
+   820→        if (!t1) t1 = findBestRelaxed(null, slot, dayPool); // relax subject + stage
+   821→        if (!t1) t1 = findBestForceDay(null, slot, dayPool); // allow 2nd assignment same day
+   822→        // Last resort: try old teachers (max 3 days)
+   823→        if (!t1) t1 = findBest(null, slot, availableOldTeachers(null, slot.day), false);
+   824→        if (!t1) t1 = findBestRelaxed(null, slot, availableOldTeachers(null, slot.day));
+   825→
+   826→        if (t1) {
+   827→          const tr = tracking[t1.id];
+   828→          tr.totalComm++; tr.dayComm[slot.day]++;
+   829→          tr.assignedSlots.push({ day: slot.day, start: slot.timeInfo.start, end: slot.timeInfo.end });
+   830→          tr.gradeHistory.push({ dayIndex: slot.dayIndex, grade: slot.grade });
+   831→          // Track old teacher days
+   832→          if (isOldTeacher(t1) && !tr.assignedSlots.some((s, idx) => idx < tr.assignedSlots.length - 1 && s.day === slot.day)) {
+   833→            oldTeacherDays[t1.id] = (oldTeacherDays[t1.id] || 0) + 1;
+   834→          }
+   835→        } else { standbyCount++; }
+   836→
+   837→        // T2: pairing rule — classified teacher (has notes) must pair with unclassified
+   838→        const blocked = t1?.id || null;
+   839→        const t1Classified = t1 ? !!(t1.notes && t1.notes.trim() !== '') : false;
+   840→        const t2Filtered = t1Classified ? dayPool.filter(t => t.id !== blocked && (!t.notes || t.notes.trim() === '')) : dayPool;
+   841→
+   842→        t2 = findBest(blocked, slot, t2Filtered, false);
+   843→        if (!t2) t2 = findBest(blocked, slot, t2Filtered, true);
+   844→        if (!t2) t2 = findBestRelaxed(blocked, slot, t2Filtered);
+   845→        if (!t2) t2 = findBestForceDay(blocked, slot, t2Filtered);
+   846→        // Relax pairing rule if no unclassified teacher available
+   847→        if (!t2 && t1Classified) {
+   848→          t2 = findBest(blocked, slot, dayPool, false);
+   849→          if (!t2) t2 = findBest(blocked, slot, dayPool, true);
+   850→          if (!t2) t2 = findBestRelaxed(blocked, slot, dayPool);
+   851→          if (!t2) t2 = findBestForceDay(blocked, slot, dayPool);
+   852→        }
+   853→        // Last resort: try old teachers for T2
+   854→        if (!t2) {
+   855→          const oldPool = availableOldTeachers(blocked, slot.day);
+   856→          t2 = findBest(blocked, slot, oldPool, false);
+   857→          if (!t2) t2 = findBestRelaxed(blocked, slot, oldPool);
+   858→        }
+   859→
+   860→        if (t2) {
+   861→          const tr = tracking[t2.id];
+   862→          tr.totalComm++; tr.dayComm[slot.day]++;
+   863→          tr.assignedSlots.push({ day: slot.day, start: slot.timeInfo.start, end: slot.timeInfo.end });
+   864→          tr.gradeHistory.push({ dayIndex: slot.dayIndex, grade: slot.grade });
+   865→          // Track old teacher days
+   866→          if (isOldTeacher(t2) && !tr.assignedSlots.some((s, idx) => idx < tr.assignedSlots.length - 1 && s.day === slot.day)) {
+   867→            oldTeacherDays[t2.id] = (oldTeacherDays[t2.id] || 0) + 1;
+   868→          }
+   869→        } else { standbyCount++; }
+   870→
+   871→        // Record assignment
+   872→        const session = finalAssignments[slot.day].find(s => s.grade === slot.grade && s.time === slot.time);
+   873→        if (session) {
+   874→          session.committees.push({
+   875→            serial: slot.comId,
+   876→            t1: t1 ? { id: t1.id, name: t1.name } : { id: null, name: '—' },
+   877→            t2: t2 ? { id: t2.id, name: t2.name } : { id: null, name: '—' }
+   878→          });
+   879→        }
+   880→      }
+   881→    }
+   882→
+   883→    // ---- Post-distribution: Recalculate hours from ACTUAL assignments (source of truth) ----
+   884→    // This eliminates any tracking accumulation bugs
+   885→    const teacherCommCount: Record<string, number> = {};
+   886→    const teacherHoursFromAssign: Record<string, number> = {};
+   887→    const teacherDayCommFromAssign: Record<string, Record<string, number>> = {};
+   888→    const teacherSlotsFromAssign: Record<string, {day:string;start:number;end:number}[]> = {};
+   889→    teachers.forEach(t => {
+   890→      teacherCommCount[t.id] = 0;
+   891→      teacherHoursFromAssign[t.id] = 0;
+   892→      teacherDayCommFromAssign[t.id] = {};
+   893→      teacherSlotsFromAssign[t.id] = [];
+   894→    });
+   895→
+   896→    for (const day of DAYS) {
+   897→      for (const sess of finalAssignments[day]) {
+   898→        const sessTimeInfo = parseTimeRange(sess.time || '9:00-10:30');
+   899→        for (const c of sess.committees) {
+   900→          [c.t1, c.t2].forEach(who => {
+   901→            if (!who.id) return;
+   902→            teacherCommCount[who.id] = (teacherCommCount[who.id] || 0) + 1;
+   903→            // Deduplicate: same day + same time = counted once
+   904→            const slotKey = day + '_' + sessTimeInfo.start + '_' + sessTimeInfo.end;
+   905→            const existing = teacherSlotsFromAssign[who.id];
+   906→            if (!existing.some(s => s.day === day && s.start === sessTimeInfo.start && s.end === sessTimeInfo.end)) {
+   907→              existing.push({ day, start: sessTimeInfo.start, end: sessTimeInfo.end });
+   908→              teacherHoursFromAssign[who.id] += sessTimeInfo.duration;
+   909→            }
+   910→            // Day committee count
+   911→            if (!teacherDayCommFromAssign[who.id]) teacherDayCommFromAssign[who.id] = {};
+   912→            teacherDayCommFromAssign[who.id][day] = (teacherDayCommFromAssign[who.id][day] || 0) + 1;
+   913→          });
+   914→        }
+   915→      }
+   916→    }
+   917→
+   918→    // Override tracking with verified data from assignments
+   919→    teachers.forEach(t => {
+   920→      if (tracking[t.id]) {
+   921→        tracking[t.id].totalComm = teacherCommCount[t.id] || 0;
+   922→        tracking[t.id].totalHours = teacherHoursFromAssign[t.id] || 0;
+   923→        tracking[t.id].dayComm = teacherDayCommFromAssign[t.id] || ({} as Record<string,number>);
+   924→        tracking[t.id].assignedSlots = teacherSlotsFromAssign[t.id] || [];
+   925→      }
+   926→    });
+   927→
+   928→    // ---- Post-distribution: Admin already handled by pool exclusion ----
+   929→
+   930→    // ---- Post-distribution: BALANCE PASS ----
+   931→    // Iteratively swap assignments from overburdened → underburdened teachers
+   932→    // to minimize the max-min spread in BOTH hours (primary) and committees (secondary)
+   933→    const BALANCE_ITERATIONS = 500;
+   934→    const recalcHours = () => {
+   935→      teachers.forEach(t => {
+   936→        const slots = tracking[t.id].assignedSlots || [];
+   937→        const seen = new Set<string>();
+   938→        let hrs = 0;
+   939→        slots.forEach(s => {
+   940→          const key = s.day + '_' + s.start + '_' + s.end;
+   941→          if (!seen.has(key)) { seen.add(key); hrs += (s.end - s.start) / 60; }
+   942→        });
+   943→        tracking[t.id].totalHours = hrs;
+   944→      });
+   945→    };
+   946→    recalcHours(); // recalc after admin swaps first
+   947→
+   948→    for (let iter = 0; iter < BALANCE_ITERATIONS; iter++) {
+   949→      const active = teachers.filter(t => tracking[t.id].totalComm > 0);
+   950→      if (active.length < 2) break;
+   951→      // Sort by HOURS first (primary), then committees (secondary)
+   952→      const sorted = [...active].sort((a, b) => {
+   953→        const hDiff = tracking[b.id].totalHours - tracking[a.id].totalHours;
+   954→        if (Math.abs(hDiff) > 0.1) return hDiff;
+   955→        return tracking[b.id].totalComm - tracking[a.id].totalComm;
+   956→      });
+   957→      const maxH = tracking[sorted[0].id].totalHours;
+   958→      const minH = tracking[sorted[sorted.length - 1].id].totalHours;
+   959→      if (maxH - minH <= 0.5) break; // spread ≤ 0.5h — tight balance
+   960→
+   961→      let swapped = false;
+   962→      // Try top-5 donors × bottom-5 recipients for wider swap search
+   963→      for (let di = 0; di < Math.min(sorted.length, 5) && !swapped; di++) {
+   964→        const donor = sorted[di];
+   965→        // Don't strip admins below 1 assignment in balance pass
+   966→        // Never swap OUT old teachers (they are last-resort only)
+   967→        if (tracking[donor.id].totalComm <= 1) continue;
+   968→        if (isOldTeacher(donor)) continue;
+   969→
+   970→        for (let ri = sorted.length - 1; ri >= Math.max(0, sorted.length - 5) && !swapped; ri--) {
+   971→          const recip = sorted[ri];
+   972→          if (donor.id === recip.id) continue;
+   973→          // NEVER give admin more assignments during balance pass
+   974→          // Old teachers CAN be recipients (swapped IN) but check their day limit
+   975→          if (recip.subject === 'Admin') continue;
+   976→          if (isOldTeacher(recip) && (oldTeacherDays[recip.id] || 0) >= 3) continue;
+   977→          if (tracking[donor.id].totalHours <= tracking[recip.id].totalHours + 0.3) continue;
+   978→            // Also check if committees would be more balanced after swap
+   979→            const donorCommAfter = tracking[donor.id].totalComm - 1;
+   980→            const recipCommAfter = tracking[recip.id].totalComm + 1;
+   981→            // Skip if swap would make committee imbalance worse (donor already has fewer comms)
+   982→
+   983→          // Try each day where donor has an assignment and recipient doesn't
+   984→          for (const day of DAYS) {
+   985→            if (swapped) break;
+   986→            if ((tracking[donor.id].dayComm[day] || 0) === 0) continue;
+   987→            if ((tracking[recip.id].dayComm[day] || 0) >= 1) continue;
+   988→
+   989→            const donorSlot = tracking[donor.id].assignedSlots.find(s => s.day === day);
+   990→            if (!donorSlot) continue;
+   991→
+   992→            // Find the session matching donor's slot
+   993→            for (const sess of finalAssignments[day]) {
+   994→              if (swapped) break;
+   995→              const sessTI = parseTimeRange(sess.time || '9:00-10:30');
+   996→              if (donorSlot.start !== sessTI.start || donorSlot.end !== sessTI.end) continue;
+   997→
+   998→              // Check recipient constraints
+   999→              if (ruleSubject && sess.subject && recip.subject === sess.subject) continue;
+  1000→              if (isSubjectExcluded(recip, { day, dayIndex: DAYS.indexOf(day), grade: sess.grade, stage: getStage(sess.grade), subject: sess.subject, time: sess.time, timeInfo: sessTI, comId: 0 })) continue;
+  1001→              if (!canSuperviseStage(recip, getStage(sess.grade))) continue;
+  1002→              if (tracking[recip.id].assignedSlots.some(s => s.day === day && !(sessTI.end <= s.start || sessTI.start >= s.end))) continue;
+  1003→              if (wasSameGradeAdjacent(tracking[recip.id], { day, dayIndex: DAYS.indexOf(day), grade: sess.grade, stage: getStage(sess.grade), subject: sess.subject, time: sess.time, timeInfo: sessTI, comId: 0 })) continue;
+  1004→
+  1005→              // Find donor in this session's committees
+  1006→              for (const c of sess.committees) {
+  1007→                const isT1 = c.t1?.id === donor.id;
+  1008→                const isT2 = c.t2?.id === donor.id;
+  1009→                if (!isT1 && !isT2) continue;
+  1010→
+  1011→                // Execute swap
+  1012→                if (isT1) c.t1 = { id: recip.id, name: recip.name };
+  1013→                else c.t2 = { id: recip.id, name: recip.name };
+  1014→
+  1015→                tracking[donor.id].totalComm--;
+  1016→                tracking[donor.id].dayComm[day] = Math.max(0, (tracking[donor.id].dayComm[day] || 0) - 1);
+  1017→                tracking[donor.id].assignedSlots = tracking[donor.id].assignedSlots.filter(s => !(s.day === day && s.start === donorSlot.start && s.end === donorSlot.end));
+  1018→                tracking[donor.id].gradeHistory = tracking[donor.id].gradeHistory.filter(h => !(h.dayIndex === DAYS.indexOf(day) && h.grade === sess.grade));
+  1019→
+  1020→                tracking[recip.id].totalComm++;
+  1021→                tracking[recip.id].dayComm[day] = (tracking[recip.id].dayComm[day] || 0) + 1;
+  1022→                tracking[recip.id].assignedSlots.push({ day, start: sessTI.start, end: sessTI.end });
+  1023→                tracking[recip.id].gradeHistory.push({ dayIndex: DAYS.indexOf(day), grade: sess.grade });
+  1024→
+  1025→                // Track old teacher day if recipient is old
+  1026→                if (isOldTeacher(recip)) {
+  1027→                  oldTeacherDays[recip.id] = (oldTeacherDays[recip.id] || 0) + 1;
+  1028→                }
+  1029→
+  1030→                swapped = true;
+  1031→                break;
+  1032→              }
+  1033→            }
+  1034→          }
+  1035→        }
+  1036→      }
+  1037→      if (!swapped) break; // no valid swap found
+  1038→      recalcHours(); // update hours after each swap
+  1039→    }
+  1040→
+  1041→    // Final hour recalculation after all balancing
+  1042→    recalcHours();
+  1043→
+  1044→    // ---- Sort committees by serial within each session (1, 2, 3...) ----
+  1045→    for (const day of DAYS) {
+  1046→      for (const sess of finalAssignments[day]) {
+  1047→        sess.committees.sort((a, b) => a.serial - b.serial);
+  1048→      }
+  1049→    }
+  1050→
+  1051→    // ---- Post-distribution: STANDBY ASSIGNMENT (per-session) ----
+  1052→    // Each grade session gets its own 1-2 standby supervisors
+  1053→    // Standby must NOT have a time-overlapping assignment, and subject exclusion rules apply
+  1054→    // Rotation: prefer teachers who weren't standby recently, fewest total standby count
+  1055→    const standbys: Record<string, Record<string, StandbyEntry[]>> = {}; // backward compat (empty)
+  1056→
+  1057→    // Track standby count per teacher for rotation fairness
+  1058→    const teacherStandbyCount: Record<string, number> = {};
+  1059→    teachers.forEach(t => { teacherStandbyCount[t.id] = 0; });
+  1060→
+  1061→    // Track which teachers are already standby at a given time on a given day
+  1062→    // Key: "day__start__end" → Set of teacher IDs
+  1063→    const todayStandbyByTime: Record<string, Set<string>> = {};
+  1064→
+  1065→    for (let di = 0; di < DAYS.length; di++) {
+  1066→      const day = DAYS[di];
+  1067→
+  1068→      // Determine pool for standby (same logic as distribution)
+  1069→      const isW2Peak = WEEK2_DAYS.includes(day) && peakW2Days.has(day);
+  1070→      const dayStandbyPool = (includeAdminW2 && isW2Peak) ? [...teachers] : nonAdminTeachers;
+  1071→
+  1072→      const daySessions = finalAssignments[day] || [];
+  1073→
+  1074→      for (const session of daySessions) {
+  1075→        if (session.committees.length === 0) continue;
+  1076→
+  1077→        const sessTimeInfo = parseTimeRange(session.time);
+  1078→        const stage = getStage(session.grade);
+  1079→        const timeKey = `${day}__${sessTimeInfo.start}__${sessTimeInfo.end}`;
+  1080→
+  1081→        // Initialize time-key tracking set
+  1082→        if (!todayStandbyByTime[timeKey]) todayStandbyByTime[timeKey] = new Set();
+  1083→
+  1084→        // Find candidates who:
+  1085→        // 1. can supervise this stage
+  1086→        // 2. do NOT have a time-overlapping assignment on this day
+  1087→        // 3. subject doesn't match session.subject (if ruleSubject)
+  1088→        // 4. not already standby for another session at same time on same day
+  1089→        // 5. special subject exclusion still applies
+  1090→        let candidates = dayStandbyPool.filter(t => {
+  1091→          // Stage compatibility
+  1092→          if (!canSuperviseStage(t, stage)) return false;
+  1093→
+  1094→          // No time-overlapping assignment on this day
+  1095→          const tr = tracking[t.id];
+  1096→          if (tr.assignedSlots.some(s => s.day === day && !(sessTimeInfo.end <= s.start || sessTimeInfo.start >= s.end))) return false;
+  1097→
+  1098→          // Own-subject exclusion
+  1099→          if (ruleSubject && session.subject && t.subject === session.subject) return false;
+  1100→
+  1101→          // Special subject exclusion (Religion/Arabic)
+  1102→          if (ruleSubject && session.subject === 'الدين' && (t.subject === 'الدين' || t.subject === 'العربي')) return false;
+  1103→          if (ruleSubject && session.subject === 'العربي' && t.subject === 'الدين' && stage === 'primary') return false;
+  1104→
+  1105→          // Not already standby at this same time on this day
+  1106→          if (todayStandbyByTime[timeKey].has(t.id)) return false;
+  1107→
+  1108→          return true;
+  1109→        });
+  1110→
+  1111→        // Rotation: deprioritize teachers who were standby YESTERDAY for ANY session
+  1112→        const yesterdayStandby = new Set<string>();
+  1113→        if (di > 0) {
+  1114→          const prevDay = DAYS[di - 1];
+  1115→          for (const prevSess of (finalAssignments[prevDay] || [])) {
+  1116→            prevSess.standbys.forEach(s => yesterdayStandby.add(s.id));
+  1117→          }
+  1118→        }
+  1119→
+  1120→        // Check if teacher is completely free today (no assignments at all on this day)
+  1121→        const isCompletelyFreeToday = (t: Teacher): boolean => {
+  1122→          const tr = tracking[t.id];
+  1123→          return !tr.assignedSlots.some(s => s.day === day);
+  1124→        };
+  1125→
+  1126→        candidates.sort((a, b) => {
+  1127→          const aWasYesterday = yesterdayStandby.has(a.id) ? 100 : 0;
+  1128→          const bWasYesterday = yesterdayStandby.has(b.id) ? 100 : 0;
+  1129→          const aFree = isCompletelyFreeToday(a) ? 0 : 10;
+  1130→          const bFree = isCompletelyFreeToday(b) ? 0 : 10;
+  1131→          return (teacherStandbyCount[a.id] + aWasYesterday + aFree) - (teacherStandbyCount[b.id] + bWasYesterday + bFree);
+  1132→        });
+  1133→
+  1134→        // Pick min(2, candidates.length) teachers
+  1135→        const picked = candidates.slice(0, Math.min(2, candidates.length));
+  1136→        session.standbys = picked.map(t => ({ id: t.id, name: t.name }));
+  1137→
+  1138→        // Track rotation count and mark as standby at this time slot
+  1139→        for (const s of picked) {
+  1140→          teacherStandbyCount[s.id]++;
+  1141→          todayStandbyByTime[timeKey].add(s.id);
+  1142→        }
+  1143→      }
+  1144→    }
+  1145→
+  1146→    // ---- Post-distribution verification ----
+  1147→    const violations: string[] = [];
+  1148→    // V-Check 1: Own-subject supervision
+  1149→    if (ruleSubject) {
+  1150→      for (const day of DAYS) {
+  1151→        for (const sess of finalAssignments[day]) {
+  1152→          for (const c of sess.committees) {
+  1153→            [c.t1, c.t2].forEach(who => {
+  1154→              if (who.id) {
+  1155→                const tch = teachers.find(x => x.id === who.id);
+  1156→                if (tch && tch.subject === sess.subject) violations.push(`${tch.name} -> own subject (${sess.subject}) on ${day}`);
+  1157→              }
+  1158→            });
+  1159→          }
+  1160→        }
+  1161→      }
+  1162→    }
+  1163→    // V-Check 2: Time overlap
+  1164→    for (const t of teachers) {
+  1165→      const tr = tracking[t.id];
+  1166→      for (let i = 0; i < tr.assignedSlots.length; i++) {
+  1167→        for (let j = i + 1; j < tr.assignedSlots.length; j++) {
+  1168→          const a = tr.assignedSlots[i], b = tr.assignedSlots[j];
+  1169→          if (a.day === b.day && !(a.end <= b.start || b.end <= a.start)) {
+  1170→            violations.push(`${t.name} -> time overlap on ${a.day}`);
+  1171→          }
+  1172→        }
+  1173→      }
+  1174→    }
+  1175→    // V-Check 3: More than 2 same-day assignments (HARD RULE)
+  1176→    for (const t of teachers) {
+  1177→      const tr = tracking[t.id];
+  1178→      for (const day of DAYS) {
+  1179→        if ((tr.dayComm[day] || 0) > 2) {
+  1180→          violations.push(`${t.name} -> 3+ committees on ${day} (HARD RULE VIOLATED)`);
+  1181→        }
+  1182→      }
+  1183→    }
+  1184→    // V-Check 4: Stage notes compliance
+  1185→    if (ruleNotes) {
+  1186→      for (const day of DAYS) {
+  1187→        for (const sess of finalAssignments[day]) {
+  1188→          const stage = getStage(sess.grade);
+  1189→          for (const c of sess.committees) {
+  1190→            [c.t1, c.t2].forEach(who => {
+  1191→              if (who.id) {
+  1192→                const tch = teachers.find(x => x.id === who.id);
+  1193→                if (tch && !canSuperviseStage(tch, stage)) violations.push(`${tch.name} -> wrong stage (${stage}) notes="${tch.notes}" on ${day}`);
+  1194→              }
+  1195→            });
+  1196→          }
+  1197→        }
+  1198→      }
+  1199→    }
+  1200→
+  1201→    // V-Check 5: Pairing rule — two classified teachers in same committee
+  1202→    for (const day of DAYS) {
+  1203→      for (const sess of finalAssignments[day]) {
+  1204→        for (const c of sess.committees) {
+  1205→          if (c.t1.id && c.t2.id) {
+  1206→            const t1Info = teachers.find(x => x.id === c.t1.id);
+  1207→            const t2Info = teachers.find(x => x.id === c.t2.id);
+  1208→            const t1Has = t1Info && t1Info.notes && t1Info.notes.trim() !== '';
+  1209→            const t2Has = t2Info && t2Info.notes && t2Info.notes.trim() !== '';
+  1210→            if (t1Has && t2Has) {
+  1211→              violations.push(`${t1Info?.name} + ${t2Info?.name} -> both classified on ${day} (${sess.grade})`);
+  1212→            }
+  1213→          }
+  1214→        }
+  1215→      }
+  1216→    }
+  1217→
+  1218→    // V-Check 6: Special subject exclusion (Religion/Arabic rules)
+  1219→    for (const day of DAYS) {
+  1220→      for (const sess of finalAssignments[day]) {
+  1221→        const sessStage = getStage(sess.grade);
+  1222→        for (const c of sess.committees) {
+  1223→          [c.t1, c.t2].forEach(who => {
+  1224→            if (!who.id) return;
+  1225→            const tch = teachers.find(x => x.id === who.id);
+  1226→            if (!tch) return;
+  1227→            if (sess.subject === 'الدين' && (tch.subject === 'العربي' || tch.subject === 'الدين')) {
+  1228→              violations.push(`${tch.name} -> excluded subject for Religion exam on ${day}`);
+  1229→            }
+  1230→            if (sess.subject === 'العربي' && tch.subject === 'الدين' && sessStage === 'primary') {
+  1231→              violations.push(`${tch.name} -> Religion excluded from primary Arabic exam on ${day}`);
+  1232→            }
+  1233→          });
+  1234→        }
+  1235→      }
+  1236→    }
+  1237→
+  1238→    // V-Check 7: Old teacher day count must be between 1-3
+  1239→    for (const ot of oldTeachers) {
+  1240→      const days = oldTeacherDays[ot.id] || 0;
+  1241→      if (days > 3) {
+  1242→        violations.push(`${ot.name} -> old teacher assigned ${days} days (max 3)`);
+  1243→      }
+  1244→    }
+  1245→
+  1246→    // ---- Build summary statistics (from verified tracking) ----
+  1247→    const allH = teachers.map(t => tracking[t.id]?.totalHours || 0);
+  1248→    const avgAll = allH.length ? allH.reduce((a, b) => a + b, 0) / allH.length : 0;
+  1249→    const spread = allH.length ? Math.sqrt(allH.reduce((s, h) => s + (h - avgAll) ** 2, 0) / allH.length) : 0;
+  1250→    let msg = `v11 | Avg: ${avgAll.toFixed(1)}h | Spread: ${spread.toFixed(1)} | Min: ${allH.length ? Math.min(...allH).toFixed(1) : 0}h | Max: ${allH.length ? Math.max(...allH).toFixed(1) : 0}h`;
+  1251→    // Count total standby assigned (from per-session standbys)
+  1252→    const totalStandby = Object.values(finalAssignments).flat().reduce((a, s) => a + s.standbys.length, 0);
+  1253→    if (totalStandby > 0) msg += ` | ${totalStandby} standby (per-session)`;
+  1254→    if (standbyCount > 0) msg += ` | ${standbyCount} unfilled`;
+  1255→    if (violations.length > 0) {
+  1256→      msg += ` | ${violations.length} violations (check console)`;
+  1257→      console.warn('[Distribution v11] Violations:', violations);
+  1258→    } else {
+  1259→      console.log('[Distribution v11] All constraints passed!');
+  1260→    }
+  1261→
+  1262→    const newResults: DistributionResults = { _version: 11, assignments: finalAssignments, standbys, tracking };
+  1263→    setResults(newResults);
+  1264→    fetch('/api/results', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: newResults }) });
+  1265→    showToast(msg, standbyCount > 0 || violations.length > 0 ? 'error' : 'success');
+  1266→    setActivePage('results');
+  1267→  };
+  1268→
+  1269→  // ========== EXPORT CSV ==========
+  1270→  const exportCSV = () => {
+  1271→    if (!results?.assignments) return;
+  1272→    let csv = 'Day,Grade,Time,Subject,Committee,Supervisor1,Supervisor2,Role\n';
+  1273→    DAYS.forEach(day => {
+  1274→      const displayDay = day.replace('W1-','Week 1 - ').replace('W2-','Week 2 - ');
+  1275→      const sessions = results.assignments[day] || [];
+  1276→      sessions.forEach(s => {
+  1277→        s.committees.forEach(c => {
+  1278→          csv += `"${displayDay}","${s.grade}","${s.time}","${s.subject || ''}","Room ${c.serial}","${c.t1.name}","${c.t2.name}","Primary"\n`;
+  1279→        });
+  1280→        // Per-session standby rows
+  1281→        if (s.standbys && s.standbys.length > 0) {
+  1282→          for (const st of s.standbys) {
+  1283→            csv += `"${displayDay}","${s.grade}","${s.time}","${s.subject || ''}","Standby","${st.name}","","Standby"\n`;
+  1284→          }
+  1285→        }
+  1286→      });
+  1287→    });
+  1288→    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  1289→    const url = URL.createObjectURL(blob);
+  1290→    const a = document.createElement('a');
+  1291→    a.href = url; a.download = 'perfect_schedule.csv'; a.click();
+  1292→    URL.revokeObjectURL(url);
+  1293→  };
+  1294→
+  1295→  // ========== EXPORT PDF (Arabic table, A4 per grade per day) ==========
+  1296→  const exportPDF = async () => {
+  1297→    if (!results?.assignments) return;
+  1298→    showToast('Generating PDF...', 'info');
+  1299→
+  1300→    const DAY_AR: Record<string, string> = {
+  1301→      'W1-Saturday': '\u0627\u0644\u0633\u0628\u062a', 'W1-Sunday': '\u0627\u0644\u0623\u062d\u062f', 'W1-Monday': '\u0627\u0644\u0627\u062b\u0646\u064a\u0646',
+  1302→      'W1-Tuesday': '\u0627\u0644\u062b\u0644\u0627\u062b\u0627\u0621', 'W1-Wednesday': '\u0627\u0644\u0623\u0631\u0628\u0639\u0627\u0621', 'W1-Thursday': '\u0627\u0644\u062e\u0645\u064a\u0633',
+  1303→      'W2-Saturday': '\u0627\u0644\u0633\u0628\u062a', 'W2-Sunday': '\u0627\u0644\u0623\u062d\u062f', 'W2-Monday': '\u0627\u0644\u0627\u062b\u0646\u064a\u0646',
+  1304→      'W2-Tuesday': '\u0627\u0644\u062b\u0644\u0627\u062b\u0627\u0621', 'W2-Wednesday': '\u0627\u0644\u0623\u0631\u0628\u0639\u0627\u0621', 'W2-Thursday': '\u0627\u0644\u062e\u0645\u064a\u0633',
+  1305→    };
+  1306→    const WEEK_AR: Record<string, string> = { 'W1': '\u0627\u0644\u0623\u0633\u0628\u0648\u0639 \u0627\u0644\u0623\u0648\u0644', 'W2': '\u0627\u0644\u0623\u0633\u0628\u0648\u0639 \u0627\u0644\u062b\u0627\u0646\u064a' };
+  1307→    const GRADE_AR: Record<string, string> = {
+  1308→      'Grade 3 Primary': '\u0627\u0644\u0635\u0641 \u0627\u0644\u062b\u0627\u0644\u062b \u0627\u0644\u0627\u0628\u062a\u062f\u0627\u0626\u064a', 'Grade 4 Primary': '\u0627\u0644\u0635\u0641 \u0627\u0644\u0631\u0627\u0628\u0639 \u0627\u0644\u0627\u0628\u062a\u062f\u0627\u0626\u064a',
+  1309→      'Grade 5 Primary': '\u0627\u0644\u0635\u0641 \u0627\u0644\u062e\u0627\u0645\u0633 \u0627\u0644\u0627\u0628\u062a\u062f\u0627\u0626\u064a', 'Grade 6 Primary': '\u0627\u0644\u0635\u0641 \u0627\u0644\u0633\u0627\u062f\u0633 \u0627\u0644\u0627\u0628\u062a\u062f\u0627\u0626\u064a',
+  1310→      'Grade 1 Prep': '\u0627\u0644\u0635\u0641 \u0627\u0644\u0623\u0648\u0644 \u0627\u0644\u0625\u0639\u062f\u0627\u062f\u064a', 'Grade 2 Prep': '\u0627\u0644\u0635\u0641 \u0627\u0644\u062b\u0627\u0646\u064a \u0627\u0644\u0625\u0639\u062f\u0627\u062f\u064a',
+  1311→      'Grade 1 Secondary': '\u0627\u0644\u0635\u0641 \u0627\u0644\u0623\u0648\u0644 \u0627\u0644\u062b\u0627\u0646\u0648\u064a', 'Grade 2 Secondary': '\u0627\u0644\u0635\u0641 \u0627\u0644\u062b\u0627\u0646\u064a \u0627\u0644\u062b\u0627\u0646\u0648\u064a',
+  1312→    };
+  1313→    let htmlPages = '';
+  1314→    for (const day of DAYS) {
+  1315→      const sessions = results.assignments[day] || [];
+  1316→      if (sessions.length === 0) continue;
+  1317→      const weekKey = day.startsWith('W1') ? 'W1' : 'W2';
+  1318→      const dayAr = DAY_AR[day] || day;
+  1319→      const weekAr = WEEK_AR[weekKey] || '';
+  1320→      for (const session of sessions) {
+  1321→        if (session.committees.length === 0 && (!session.standbys || session.standbys.length === 0)) continue;
+  1322→        const rowsHtml = session.committees.map((c: any) =>
+  1323→          '<tr><td rowspan="2" class="num-cell">' + c.serial + '</td><td class="name-cell">' + c.t1.name + '</td><td class="sig-cell"></td><td class="notes-cell"></td></tr>' +
+  1324→          '<tr class="row2"><td class="name-cell">' + c.t2.name + '</td><td class="sig-cell"></td><td class="notes-cell"></td></tr>'
+  1325→        ).join('');
+  1326→        let pageHtml = '<div class="page"><div class="header-title">\u062c\u062f\u0648\u0644 \u0625\u0634\u0631\u0627\u0641 \u0627\u0644\u0627\u0645\u062a\u062d\u0627\u0646\u0627\u062a</div>' +
+  1327→          '<div class="header-info"><div><span class="label">\u0627\u0644\u064a\u0648\u0645:</span> ' + dayAr + ' (' + weekAr + ')</div>' +
+  1328→          '<div><span class="label">\u0627\u0644\u0635\u0641:</span> ' + (GRADE_AR[session.grade] || session.grade) + '</div>' +
+  1329→          '<div><span class="label">\u0627\u0644\u0645\u0627\u062f\u0629:</span> ' + (session.subject || '\u2014') + '</div>' +
+  1330→          '<div><span class="label">\u0627\u0644\u062a\u0648\u0642\u064a\u062a:</span> ' + session.time + '</div></div>' +
+  1331→          '<table><thead><tr><th class="th-num">\u0645</th><th class="th-name">\u0627\u0644\u0627\u0633\u0645</th><th class="th-sig">\u0627\u0644\u062a\u0648\u0642\u064a\u0639</th><th class="th-notes">\u0627\u0644\u0645\u0644\u0627\u062d\u0638\u0627\u062a</th></tr></thead>' +
+  1332→          '<tbody>' + rowsHtml + '</tbody></table>';
+  1333→        // Per-session standby section
+  1334→        if (session.standbys && session.standbys.length > 0) {
+  1335→          const stRows = session.standbys.map((s: any, i: number) =>
+  1336→            '<tr><td class="num-cell">' + (i+1) + '</td><td class="name-cell">' + s.name + '</td><td class="sig-cell"></td><td class="notes-cell"></td></tr>'
+  1337→          ).join('');
+  1338→          pageHtml += '<div class="standby-section"><div class="standby-title">\u0627\u0644\u0627\u062d\u062a\u064a\u0627\u0637\u064a</div>' +
+  1339→            '<table class="standby-table"><thead><tr><th class="th-num">\u0645</th><th class="th-name">\u0627\u0644\u0627\u0633\u0645</th><th class="th-sig">\u0627\u0644\u062a\u0648\u0642\u064a\u0639</th><th class="th-notes">\u0627\u0644\u0645\u0644\u0627\u062d\u0638\u0627\u062a</th></tr></thead>' +
+  1340→            '<tbody>' + stRows + '</tbody></table></div>';
+  1341→        }
+  1342→        pageHtml += '</div>';
+  1343→        htmlPages += pageHtml;
+  1344→      }
+  1345→    }
+  1346→    if (!htmlPages) { showToast('No results to export', 'error'); return; }
+  1347→
+  1348→    const css = '*{margin:0;padding:0;box-sizing:border-box}' +
+  1349→      'body{font-family:Arial,Helvetica,sans-serif;color:#000;background:#fff}' +
+  1350→      '.page{width:794px;min-height:1123px;padding:50px 40px;background:#fff}' +
+  1351→      '.header-title{text-align:center;font-size:22px;font-weight:bold;color:#1e3a5f;border-bottom:3px double #1e3a5f;padding-bottom:8px;margin-bottom:16px;width:100%}' +
+  1352→      '.header-info{display:flex;flex-wrap:wrap;justify-content:space-between;font-size:13px;margin-bottom:16px;padding:10px 14px;background:#f0f4f8;border-radius:6px;border:1px solid #d0d8e0;font-weight:bold}' +
+  1353→      '.header-info .label{color:#555}' +
+  1354→      'table{width:100%;border-collapse:collapse;margin-top:10px}' +
+  1355→      'thead tr{background:#1e3a5f;color:#fff}' +
+  1356→      'th{border:1px solid #333;padding:8px 6px;text-align:center;font-size:13px}' +
+  1357→      '.th-num{width:40px}.th-name{width:auto}.th-sig{width:90px}.th-notes{width:130px}' +
+  1358→      'td{border:1px solid #333;padding:8px 10px;text-align:center;font-size:14px;color:#000}' +
+  1359→      '.num-cell{font-size:14px;vertical-align:middle;width:40px;color:#000}' +
+  1360→      '.name-cell{font-weight:bold;font-size:14px;color:#000;text-align:center}' +
+  1361→      '.sig-cell{width:90px}.notes-cell{width:130px}' +
+  1362→      'tr.row2 td{border-top:none}' +
+  1363→      '.standby-section{margin-top:20px;border:2px solid #f59e0b;border-radius:6px;padding:12px 16px;background:#fffbeb}' +
+  1364→      '.standby-title{font-size:15px;font-weight:bold;color:#b47814;margin-bottom:10px;text-align:center}' +
+  1365→      '.standby-table{font-size:12px}.standby-table th{background:#b47814;color:#fff;font-size:12px;padding:6px 4px}' +
+  1366→      '.standby-table td{font-size:13px;padding:6px 8px}';
+  1367→
+  1368→    const container = document.createElement('div');
+  1369→    container.style.cssText = 'position:fixed;top:-9999px;left:0;width:794px;z-index:-1;background:#fff;';
+  1370→    container.innerHTML = '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;700&display=swap"><style>' + css + '</style><div style="direction:rtl;font-family:\'Cairo\',Arial,Helvetica,sans-serif;color:#000;background:#fff;">' + htmlPages + '</div>';
+  1371→    document.body.appendChild(container);
+  1372→
+  1373→    try {
+  1374→      await new Promise(r => setTimeout(r, 800));
+  1375→      const pages = container.querySelectorAll('.page');
+  1376→      const pdf = new jsPDF({ orientation: 'p', unit: 'mm', format: 'a4' });
+  1377→      const pdfW = 210, pdfH = 297;
+  1378→
+  1379→      for (let i = 0; i < pages.length; i++) {
+  1380→        if (i > 0) pdf.addPage();
+  1381→        const canvas = await html2canvas(pages[i] as HTMLElement, { scale: 2, useCORS: true, backgroundColor: '#ffffff', logging: false });
+  1382→        const imgW = pdfW;
+  1383→        const imgH = (canvas.height * pdfW) / canvas.width;
+  1384→        pdf.addImage(canvas.toDataURL('image/jpeg', 0.95), 'JPEG', 0, 0, imgW, Math.min(imgH, pdfH));
+  1385→      }
+  1386→
+  1387→      pdf.save('exam-supervision.pdf');
+  1388→      showToast('PDF downloaded!', 'success');
+  1389→    } catch (err) {
+  1390→      console.error('PDF generation error:', err);
+  1391→      showToast('Error generating PDF', 'error');
+  1392→    } finally {
+  1393→      document.body.removeChild(container);
+  1394→    }
+  1395→  };
+  1396→
+  1397→
+  1398→  // ========== RESET ALL ==========
+  1399→  const resetAll = async () => {
+  1400→    if (!confirm('Perform dynamic hard reset?')) return;
+  1401→    await fetch('/api/distribute', { method: 'DELETE' });
+  1402→    loadAll();
+  1403→    setResults(null);
+  1404→    showToast('All data has been reset', 'info');
+  1405→  };
+  1406→
+  1407→  // ========== RENDER HELPERS ==========
+  1408→  const getCell = (grade: string, day: string): ScheduleCell => {
+  1409→    return scheduleBuffer[`${grade}__${day}`] || { grade, day, committees: 0, subject: '', time: DEFAULT_TIMES[grade] || '9:00-10:30' };
+  1410→  };
+  1411→
+  1412→  const totalCommittees = Object.values(scheduleBuffer).reduce((a, c) => a + (c.committees || 0), 0);
+  1413→  const totalSlots = totalCommittees * 2;
+  1414→
+  1415→  // ========== LOGIN SCREEN ==========
+  1416→  if (view === 'login') {
+  1417→    return (
+  1418→      <div className="app" style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative', zIndex: 1 }}>
+  1419→        <style jsx>{`
+  1420→          @keyframes pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.4;transform:scale(1.4)} }
+  1421→        `}</style>
+  1422→        <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 16, padding: 48, maxWidth: 400, width: '90%', textAlign: 'center' }}>
+  1423→          <div style={{ width: 12, height: 12, background: 'var(--accent)', borderRadius: '50%', margin: '0 auto 16px', animation: 'pulse 2s infinite' }} />
+  1424→          <h1 style={{ fontFamily: 'var(--mono)', fontSize: 16, color: 'var(--accent)', letterSpacing: 2, marginBottom: 8 }}>EXAM · SUPERVISOR</h1>
+  1425→          <p style={{ color: 'var(--text2)', fontSize: 13, marginBottom: 32 }}>Exam Committee Distribution System</p>
+  1426→
+  1427→          {!loginMode ? (
+  1428→            /* Step 1: Choose role */
+  1429→            <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+  1430→              <button
+  1431→                onClick={() => { setLoginMode('user'); setLoginError(''); setPassword(''); }}
+  1432→                style={{ padding: '18px 24px', borderRadius: 12, background: 'var(--surface2)', border: '1px solid var(--border)', color: 'var(--text)', fontSize: 16, fontWeight: 600, cursor: 'pointer', fontFamily: 'var(--sans)', transition: 'all 0.2s', width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10 }}
+  1433→                onMouseOver={e => { (e.target as HTMLElement).style.borderColor = 'var(--accent)'; (e.target as HTMLElement).style.background = 'rgba(0,212,255,0.05)'; }}
+  1434→                onMouseOut={e => { (e.target as HTMLElement).style.borderColor = 'var(--border)'; (e.target as HTMLElement).style.background = 'var(--surface2)'; }}
+  1435→              >
+  1436→                <span style={{ fontSize: 22 }}>👤</span> Enter as User
+  1437→              </button>
+  1438→              <button
+  1439→                onClick={() => { setLoginMode('admin'); setLoginError(''); setPassword(''); }}
+  1440→                style={{ padding: '18px 24px', borderRadius: 12, background: 'var(--accent2)', border: 'none', color: '#fff', fontSize: 16, fontWeight: 600, cursor: 'pointer', fontFamily: 'var(--sans)', transition: 'all 0.2s', width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10 }}
+  1441→                onMouseOver={e => { (e.target as HTMLElement).style.background = '#e55a2b'; }}
+  1442→                onMouseOut={e => { (e.target as HTMLElement).style.background = 'var(--accent2)'; }}
+  1443→              >
+  1444→                <span style={{ fontSize: 22 }}>🔐</span> Enter as Admin
+  1445→              </button>
+  1446→            </div>
+  1447→          ) : (
+  1448→            /* Step 2: Enter credentials for chosen role */
+  1449→            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+  1450→              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, marginBottom: 4, color: 'var(--text2)', fontSize: 13 }}>
+  1451→                <button onClick={() => { setLoginMode(null); setLoginError(''); setPassword(''); setSelectedSupervisor(''); }} style={{ background: 'none', border: 'none', color: 'var(--text2)', cursor: 'pointer', fontSize: 16, padding: '0 4px', lineHeight: 1 }}>←</button>
+  1452→                <span>{loginMode === 'user' ? '👤 User Login' : '🔐 Admin Login'}</span>
+  1453→              </div>
+  1454→              {loginMode === 'user' && (
+  1455→                <input
+  1456→                  type="text"
+  1457→                  placeholder="Enter your username"
+  1458→                  value={selectedSupervisor}
+  1459→                  onChange={e => { setSelectedSupervisor(e.target.value); setLoginError(''); }}
+  1460→                  autoFocus
+  1461→                  style={{ padding: '14px 16px', borderRadius: 10, background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text)', fontSize: 15, fontFamily: 'var(--sans)', outline: 'none', width: '100%' }}
+  1462→                />
+  1463→              )}
+  1464→              <div style={{ position: 'relative' }}>
+  1465→                <input
+  1466→                type={showLoginPass ? 'text' : 'password'}
+  1467→                placeholder={loginMode === 'user' ? 'Enter Password' : 'Enter Admin Password'}
+  1468→                value={password}
+  1469→                onChange={e => { setPassword(e.target.value); setLoginError(''); }}
+  1470→                onKeyDown={e => e.key === 'Enter' && handleLogin(loginMode)}
+  1471→                autoFocus={loginMode === 'admin'}
+  1472→                style={{ padding: '14px 44px 14px 16px', borderRadius: 10, background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text)', fontSize: 15, fontFamily: 'var(--sans)', outline: 'none', textAlign: 'center', width: '100%' }}
+  1473→              />
+  1474→              <button type="button" onClick={() => setShowLoginPass(!showLoginPass)} style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', fontSize: 18, color: 'var(--text2)', padding: 4, lineHeight: 1 }}>{showLoginPass ? '🙈' : '👁'}</button>
+  1475→              </div>
+  1476→              <button
+  1477→                onClick={() => handleLogin(loginMode)}
+  1478→                style={{
+  1479→                  padding: '14px 24px', borderRadius: 10,
+  1480→                  background: loginMode === 'admin' ? 'var(--accent2)' : 'var(--accent)',
+  1481→                  border: loginMode === 'admin' ? 'none' : '1px solid var(--accent)',
+  1482→                  color: loginMode === 'admin' ? '#fff' : 'var(--bg)',
+  1483→                  fontSize: 15, fontWeight: 700, cursor: 'pointer', fontFamily: 'var(--sans)',
+  1484→                  transition: 'all 0.2s', width: '100%'
+  1485→                }}
+  1486→                onMouseOver={e => {
+  1487→                  if (loginMode === 'admin') (e.target as HTMLElement).style.background = '#e55a2b';
+  1488→                  else (e.target as HTMLElement).style.opacity = '0.85';
+  1489→                }}
+  1490→                onMouseOut={e => {
+  1491→                  if (loginMode === 'admin') (e.target as HTMLElement).style.background = 'var(--accent2)';
+  1492→                  else (e.target as HTMLElement).style.opacity = '1';
+  1493→                }}
+  1494→              >
+  1495→                Login
+  1496→              </button>
+  1497→              {loginError && <p style={{ color: 'var(--danger)', fontSize: 12, margin: '-4px 0 0' }}>{loginError}</p>}
+  1498→            </div>
+  1499→          )}
+  1500→
+  1501→          <div style={{ marginTop: 24, fontSize: 11, color: 'var(--text2)' }}>
+  1502→            <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: isConnected ? 'var(--success)' : 'var(--danger)', marginRight: 6 }} />
+  1503→            {isConnected ? 'Connected' : 'Offline'}
+  1504→          </div>
+  1505→        </div>
+  1506→      </div>
+  1507→    );
+  1508→  }
+  1509→
+  1510→  const isAdmin = view === 'admin';
+  1511→  const canEdit = isAdmin || userPermissions.includes('teachers') || userPermissions.includes('schedule') || userPermissions.includes('schedule_edit');
+  1512→  const roleLabel = isAdmin ? 'ADMIN' : currentUser || 'USER';
+  1513→  const roleColor = isAdmin ? 'var(--accent2)' : 'var(--accent3)';
+  1514→
+  1515→  // ========== PERMISSIONS: Page access control ==========
+  1516→  const canAccessPage = (page: Page): boolean => {
+  1517→    if (page === 'distribute' || page === 'log') return isAdmin; // Always admin-only
+  1518→    if (isAdmin) return true; // Admin sees all
+  1519→    // schedule_edit grants same page visibility as schedule
+  1520→    if (page === 'schedule' && userPermissions.includes('schedule_edit')) return true;
+  1521→    // Regular user: default access to teachers (view), results, stats
+  1522→    if (!userPermissions || userPermissions.length === 0) {
+  1523→      return page === 'teachers' || page === 'results' || page === 'stats';
+  1524→    }
+  1525→    // User with specific permissions: only those pages
+  1526→    return userPermissions.includes(page);
+  1527→  };
+  1528→
+  1529→  // ========== TEACHERS PAGE ==========
+  1530→  const renderTeachersPage = () => (
+  1531→    <div className="card">
+  1532→      <div className="card-header">
+  1533→        <div className="card-title">Teacher Registry</div>
+  1534→        {(isAdmin || canEdit) && (
+  1535→        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+  1536→          {isAdmin && <button className="btn btn-demo" onClick={generateDemoTeachers}>🧪 Generate 200 Mock Teachers</button>}
+  1537→          {isAdmin && <button className="btn btn-ghost" onClick={importCSV}>📂 Import CSV</button>}
+  1538→          <button className="btn btn-primary" onClick={() => { cancelEdit(); setShowAddTeacher(!showAddTeacher); }}>
+  1539→            + Add New Teacher
+  1540→          </button>
+  1541→        </div>
+  1542→        )}
+  1543→      </div>
+  1544→
+  1545→      {showAddTeacher && (
+  1546→        <div style={{ background: 'var(--surface2)', borderRadius: 10, padding: 20, marginBottom: 20 }}>
+  1547→          <div className="grid-3">
+  1548→            <div className="form-group">
+  1549→              <label className="form-label">Full Name</label>
+  1550→              <input className="form-input" value={formName} onChange={e => setFormName(e.target.value)} placeholder="e.g. John Doe" />
+  1551→            </div>
+  1552→            <div className="form-group">
+  1553→              <label className="form-label">Specialist Subject</label>
+  1554→              <select className="form-select" value={formSubject} onChange={e => setFormSubject(e.target.value)}>
+  1555→                <option value="">-- Choose Subject --</option>
+  1556→                {SUBJECTS.map(s => <option key={s} value={s}>{s}</option>)}
+  1557→              </select>
+  1558→            </div>
+  1559→            <div className="form-group">
+  1560→              <label className="form-label">Stage Assignment Notes</label>
+  1561→              <input className="form-input" value={formNotes} onChange={e => setFormNotes(e.target.value)} placeholder="e.g. prep, sec, primary" />
+  1562→            </div>
+  1563→          </div>
+  1564→          <div style={{ display: 'flex', gap: 10 }}>
+  1565→            <button className="btn btn-primary" onClick={saveTeacher}>✓ Save Teacher</button>
+  1566→            <button className="btn btn-ghost" onClick={cancelAddForm}>Cancel</button>
+  1567→          </div>
+  1568→        </div>
+  1569→      )}
+  1570→
+  1571→      <div id="teachers-stats" style={{ display: 'flex', gap: 12, marginBottom: 16, flexWrap: 'wrap' }}>
+  1572→        <span className="badge badge-green">Total Registered: {teachers.length}</span>
+  1573→        {Object.entries(teachers.reduce((acc: Record<string,number>, t) => { acc[t.subject] = (acc[t.subject]||0)+1; return acc; }, {})).map(([s,c]) => (
+  1574→          <span key={s} className="badge badge-blue">{s}: {c}</span>
+  1575→        ))}
+  1576→      </div>
+  1577→
+  1578→      <div className="table-wrap">
+  1579→        <table>
+  1580→          <thead>
+  1581→            <tr>
+  1582→              <th>Index</th><th>Teacher Name</th><th>Subject Badge</th><th>Stage Rules</th>
+  1583→              <th>Actions</th>
+  1584→            </tr>
+  1585→          </thead>
+  1586→          <tbody>
+  1587→            {teachers.length === 0 ? (
+  1588→              <tr><td colSpan={5} style={{ textAlign: 'center', padding: 32 }}>No teachers loaded in registry.</td></tr>
+  1589→            ) : teachers.map((t, i) => {
+  1590→              if (editTeacherId === t.id) return (
+  1591→                <tr key={t.id} style={{ background: 'rgba(0,212,255,0.06)' }}>
+  1592→                  <td style={{ fontWeight: 700, color: 'var(--accent)' }}>{i + 1}</td>
+  1593→                  <td><input className="form-input" value={formName} onChange={e => setFormName(e.target.value)} style={{ margin: 0, padding: '6px 10px', fontSize: 13 }} autoFocus /></td>
+  1594→                  <td>
+  1595→                    <select className="form-select" value={formSubject} onChange={e => setFormSubject(e.target.value)} style={{ margin: 0, padding: '6px 8px', fontSize: 13 }}>
+  1596→                      <option value="">-- Subject --</option>
+  1597→                      {SUBJECTS.map(s => <option key={s} value={s}>{s}</option>)}
+  1598→                    </select>
+  1599→                  </td>
+  1600→                  <td><input className="form-input" value={formNotes} onChange={e => setFormNotes(e.target.value)} placeholder="Stage notes" style={{ margin: 0, padding: '6px 10px', fontSize: 13 }} /></td>
+  1601→                  <td style={{ display: 'flex', gap: 6 }}>
+  1602→                    <button className="action-btn edit-btn" onClick={() => inlineSave(t.id)} style={{ background: 'var(--success)', color: '#fff' }}>Save</button>
+  1603→                    <button className="action-btn del-btn" onClick={() => setEditTeacherId(null)}>Cancel</button>
+  1604→                  </td>
+  1605→                </tr>
+  1606→              );
+  1607→              return (
+  1608→                <tr key={t.id}>
+  1609→                  <td>{i + 1}</td>
+  1610→                  <td style={{ fontWeight: 600, color: 'var(--text)' }}>{t.name}</td>
+  1611→                  <td><span className="badge badge-blue">{t.subject}</span></td>
+  1612→                  <td style={{ color: 'var(--accent3)' }}>{t.notes || 'Any Stage'}</td>
+  1613→                  <td>
+  1614→                    <button className="action-btn edit-btn" onClick={() => startEdit(t)}>Edit</button>
+  1615→                    {isAdmin && <button className="action-btn del-btn" onClick={() => deleteTeacher(t.id)}>Remove</button>}
+  1616→                  </td>
+  1617→                </tr>
+  1618→              );
+  1619→            })}
+  1620→          </tbody>
+  1621→        </table>
+  1622→      </div>
+  1623→    </div>
+  1624→  );
+  1625→
+  1626→  // ========== SCHEDULE PAGE ==========
+  1627→  const renderSchedulePage = () => (
+  1628→    <div className="card">
+  1629→      <div className="card-header">
+  1630→        <div className="card-title">Exam Structure Blueprint</div>
+  1631→        {isAdmin && (
+  1632→        <div style={{ display: 'flex', gap: 10 }}>
+  1633→          <button className="btn btn-primary" onClick={saveSchedule}>💾 Save Blueprint</button>
+  1634→          <button className="btn btn-ghost" onClick={resetSchedule}>↺ Reset Matrix</button>
+  1635→        </div>
+  1636→        )}
+  1637→      </div>
+  1638→      <div className="table-wrap" style={{ maxHeight: '70vh', overflow: 'auto' }}>
+  1639→        <div className="schedule-grid">
+  1640→          {/* Row 1: Corner + Week Labels */}
+  1641→          <div className="sg-corner">Grade</div>
+  1642→          <div className="sg-week-label" style={{ gridColumn: 'span 6', color: 'var(--accent)', background: 'rgba(0,212,255,0.08)' }}>── Week 1 ──</div>
+  1643→          <div className="sg-week-label sg-w2-sep" style={{ gridColumn: 'span 6', color: 'var(--accent2)', background: 'rgba(255,107,53,0.08)' }}>── Week 2 ──</div>
+  1644→          {/* Row 2: Corner + Day Names */}
+  1645→          <div className="sg-header">Grade</div>
+  1646→          {WEEK1_DAYS.map(d => <div key={d} className="sg-header">{d.replace('W1-','').slice(0,3)}</div>)}
+  1647→          {WEEK2_DAYS.map(d => <div key={d} className="sg-header sg-w2-sep">{d.replace('W2-','').slice(0,3)}</div>)}
+  1648→          {/* Data Rows */}
+  1649→          {GRADES.map(grade => (
+  1650→            <React.Fragment key={grade}>
+  1651→              <div className="sg-grade">{grade}</div>
+  1652→              {WEEK1_DAYS.map(day => {
+  1653→                const cell = getCell(grade, day);
+  1654→                return (
+  1655→                  <div key={day} className="sg-cell">
+  1656→                    <input type="number" min="0" placeholder="Comms" value={cell.committees || ''} onChange={e => updateCell(grade, day, 'committees', parseInt(e.target.value) || 0)} readOnly={!(isAdmin || userPermissions.includes('schedule_edit'))} style={!(isAdmin || userPermissions.includes('schedule_edit')) ? { opacity: 0.7, cursor: 'not-allowed' } : {}} />
+  1657→                    <select value={cell.subject || ''} onChange={e => updateCell(grade, day, 'subject', e.target.value)} disabled={!(isAdmin || userPermissions.includes('schedule_edit'))} style={!(isAdmin || userPermissions.includes('schedule_edit')) ? { opacity: 0.7, cursor: 'not-allowed' } : {}}>
+  1658→                      <option value="">Subject</option>
+  1659→                      {SUBJECTS.map(s => <option key={s} value={s}>{s}</option>)}
+  1660→                    </select>
+  1661→                    <input type="text" placeholder="Time" value={cell.time || ''} onChange={e => updateCell(grade, day, 'time', e.target.value)} readOnly={!(isAdmin || userPermissions.includes('schedule_edit'))} style={!(isAdmin || userPermissions.includes('schedule_edit')) ? { opacity: 0.7, cursor: 'not-allowed' } : {}} />
+  1662→                  </div>
+  1663→                );
+  1664→              })}
+  1665→              {WEEK2_DAYS.map(day => {
+  1666→                const cell = getCell(grade, day);
+  1667→                return (
+  1668→                  <div key={day} className="sg-cell sg-w2-cell">
+  1669→                    <input type="number" min="0" placeholder="Comms" value={cell.committees || ''} onChange={e => updateCell(grade, day, 'committees', parseInt(e.target.value) || 0)} readOnly={!(isAdmin || userPermissions.includes('schedule_edit'))} style={!(isAdmin || userPermissions.includes('schedule_edit')) ? { opacity: 0.7, cursor: 'not-allowed' } : {}} />
+  1670→                    <select value={cell.subject || ''} onChange={e => updateCell(grade, day, 'subject', e.target.value)} disabled={!(isAdmin || userPermissions.includes('schedule_edit'))} style={!(isAdmin || userPermissions.includes('schedule_edit')) ? { opacity: 0.7, cursor: 'not-allowed' } : {}}>
+  1671→                      <option value="">Subject</option>
+  1672→                      {SUBJECTS.map(s => <option key={s} value={s}>{s}</option>)}
+  1673→                    </select>
+  1674→                    <input type="text" placeholder="Time" value={cell.time || ''} onChange={e => updateCell(grade, day, 'time', e.target.value)} readOnly={!(isAdmin || userPermissions.includes('schedule_edit'))} style={!(isAdmin || userPermissions.includes('schedule_edit')) ? { opacity: 0.7, cursor: 'not-allowed' } : {}} />
+  1675→                  </div>
+  1676→                );
+  1677→              })}
+  1678→            </React.Fragment>
+  1679→          ))}
+  1680→        </div>
+  1681→      </div>
+  1682→    </div>
+  1683→  );
+  1684→
+  1685→  // ========== DISTRIBUTE PAGE (Admin Only) ==========
+  1686→  const renderDistributePage = () => (
+  1687→    <>
+  1688→      <div className="grid-4" style={{ marginBottom: 24 }}>
+  1689→        <div className="stat-card"><span className="stat-number">{teachers.length}</span><div className="stat-label">Available Pools</div></div>
+  1690→        <div className="stat-card"><span className="stat-number">{totalCommittees}</span><div className="stat-label">Active Rooms Matrix</div></div>
+  1691→        <div className="stat-card"><span className="stat-number">{totalSlots}</span><div className="stat-label">Total Task Slots</div></div>
+  1692→      </div>
+  1693→      <div className="card">
+  1694→        <div className="card-title" style={{ marginBottom: 16 }}>Distribution Engine Rules</div>
+  1695→        <div className="grid-2">
+  1696→          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+  1697→            <label style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, cursor: 'pointer' }}>
+  1698→              <input type="checkbox" id="rule-subject" defaultChecked style={{ width: 16, height: 16, accentColor: 'var(--accent)' }} />
+  1699→              No teacher supervises their own subject
+  1700→            </label>
+  1701→            <label style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, cursor: 'pointer' }}>
+  1702→              <input type="checkbox" id="rule-daylimit" defaultChecked style={{ width: 16, height: 16, accentColor: 'var(--accent)' }} />
+  1703→              Max 1 duty per day (relaxed only if shortage)
+  1704→            </label>
+  1705→          </div>
+  1706→          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+  1707→            <label style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, cursor: 'pointer' }}>
+  1708→              <input type="checkbox" id="rule-notes" defaultChecked style={{ width: 16, height: 16, accentColor: 'var(--accent)' }} />
+  1709→              Respect Stage Notes (primary/prep/sec)
+  1710→            </label>
+  1711→            <label style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, cursor: 'pointer', padding: '8px 12px', background: 'rgba(255,107,53,0.06)', borderRadius: 8, border: '1px solid rgba(255,107,53,0.15)' }}>
+  1712→              <input type="checkbox" id="rule-admin-w2" defaultChecked={false} style={{ width: 16, height: 16, accentColor: 'var(--accent2)' }} />
+  1713→              <span style={{ color: 'var(--accent2)', fontWeight: 600 }}>Admin in Week 2 only</span>
+  1714→              <span style={{ fontSize: 11, color: 'var(--text2)' }}>(peak days, last resort)</span>
+  1715→            </label>
+  1716→            <div style={{ fontSize: 11, color: 'var(--text2)', lineHeight: 1.6, padding: '4px 0' }}>
+  1717→              • Chronological day-by-day processing<br/>
+  1718→              • MAX 2 committees per teacher per day (hard rule)<br/>
+  1719→              • Admin = LAST resort, fewer hours than others<br/>
+  1720→              • Hours balanced from actual assignments<br/>
+  1721→              • No same grade on consecutive days<br/>
+  1722→              • No time overlap for same teacher
+  1723→            </div>
+  1724→          </div>
+  1725→        </div>
+  1726→      </div>
+  1727→      <div className="distribute-btn-wrap">
+  1728→        <button className="btn btn-orange" onClick={runDistribution}>
+  1729→          ⚡ RUN ULTRA ANTI-OVERLAP BALANCER
+  1730→        </button>
+  1731→      </div>
+  1732→    </>
+  1733→  );
+  1734→
+  1735→  // ========== RESULTS PAGE ==========
+  1736→  const renderResultsPage = () => {
+  1737→    if (!results?.assignments) return <div className="card"><div className="empty-state"><p>Execute the distribution engine to view results</p></div></div>;
+  1738→
+  1739→    return (
+  1740→      <div>
+  1741→        <div style={{ marginBottom: 16, display: 'flex', gap: 10 }}>
+  1742→          <button className="btn btn-primary" onClick={exportPDF}>📄 Download PDF (A4 Printable)</button>
+  1743→        </div>
+  1744→        {DAYS.map((day, idx) => {
+  1745→          const sessions = results.assignments[day] || [];
+  1746→          const hasAnyContent = sessions.some(s => s.committees.length > 0);
+  1747→          if (!hasAnyContent) return null;
+  1748→          const displayDay = day.replace('W1-','Week 1 - ').replace('W2-','Week 2 - ');
+  1749→          // Week separator before first W2 day
+  1750→          const weekSep = idx === WEEK1_DAYS.length ? (
+  1751→            <div key="w2-sep" style={{ display: 'flex', alignItems: 'center', gap: 12, margin: '20px 0 8px', color: 'var(--accent2)', fontWeight: 700, fontSize: 14 }}>
+  1752→              <span style={{ flex: 1, height: 1, background: 'linear-gradient(90deg, var(--accent2), transparent)' }} />
+  1753→              ── Week 2 ──
+  1754→              <span style={{ flex: 1, height: 1, background: 'linear-gradient(270deg, var(--accent2), transparent)' }} />
+  1755→            </div>
+  1756→          ) : null;
+  1757→          return (
+  1758→            <React.Fragment key={day}>
+  1759→              {weekSep}
+  1760→            <div className="result-day">
+  1761→              <div className="result-day-header" onClick={() => {
+  1762→                const body = document.getElementById('day-body-' + day);
+  1763→                if (body) body.style.display = body.style.display === 'none' ? 'block' : 'none';
+  1764→              }}>
+  1765→                <div className="result-day-title">📅 {displayDay} </div>
+  1766→                <span>View Options ▼</span>
+  1767→              </div>
+  1768→              <div className="result-day-body" id={'day-body-' + day} style={{ display: 'block' }}>
+  1769→                {sessions.map((session, si) => (
+  1770→                  <div key={si} className="result-session">
+  1771→                    <div className="result-session-header">
+  1772→                      <span className="rs-grade">{session.grade}</span>
+  1773→                      <span className="rs-time">⏰ Window: {session.time}</span>
+  1774→                      <span className="rs-subject">📖 Subject: {session.subject || 'Unassigned'}</span>
+  1775→                    </div>
+  1776→                    <div className="result-com" style={{ background: 'var(--surface2)', fontSize: 12, fontWeight: 600 }}>
+  1777→                      <div className="rc-cell rc-num">Room</div>
+  1778→                      <div className="rc-cell">Lead Supervisor</div>
+  1779→                      <div className="rc-cell">Associate Supervisor</div>
+  1780→                      <div className="rc-cell" style={{ justifyContent: 'center' }}>Daily Load Check</div>
+  1781→                    </div>
+  1782→                    {session.committees.map((c, ci) => {
+  1783→                      const dc1 = c.t1.id ? results.tracking[c.t1.id]?.dayComm[day] : 0;
+  1784→                      const dc2 = c.t2.id ? results.tracking[c.t2.id]?.dayComm[day] : 0;
+  1785→                      return (
+  1786→                        <div key={ci} className="result-com">
+  1787→                          <div className="rc-cell rc-num">Room {c.serial}</div>
+  1788→                          <div className="rc-cell">{c.t1.name}</div>
+  1789→                          <div className="rc-cell">{c.t2.name}</div>
+  1790→                          <div className="rc-cell" style={{ justifyContent: 'center', fontFamily: 'var(--mono)', color: 'var(--text2)', fontSize: 11 }}>
+  1791→                            {c.t1.id ? dc1 + ' Duty' : '-'} / {c.t2.id ? dc2 + ' Duty' : '-'}
+  1792→                          </div>
+  1793→                        </div>
+  1794→                      );
+  1795→                    })}
+  1796→                    {/* Per-session standby inline */}
+  1797→                    {session.standbys && session.standbys.length > 0 && (
+  1798→                      <div style={{ marginTop: 8, background: 'rgba(245,158,11,0.06)', border: '1px solid rgba(245,158,11,0.2)', borderRadius: 8, padding: '8px 14px', display: 'flex', alignItems: 'center', gap: 10 }}>
+  1799→                        <span style={{ fontSize: 12, fontWeight: 700, color: '#f59e0b' }}>📍 Standby:</span>
+  1800→                        <span style={{ fontSize: 13, color: 'var(--text)' }}>
+  1801→                          {session.standbys.map((s, i) => <span key={s.id}>{i > 0 && ' , '}{s.name}</span>)}
+  1802→                        </span>
+  1803→                      </div>
+  1804→                    )}
+  1805→                  </div>
+  1806→                ))}
+  1807→              </div>
+  1808→            </div>
+  1809→            </React.Fragment>
+  1810→          );
+  1811→        })}
+  1812→      </div>
+  1813→    );
+  1814→  };
+  1815→
+  1816→  // ========== STATS PAGE (v6 — hours from assignments + standby) ==========
+  1817→  const renderStatsPage = () => {
+  1818→    if (!results?.assignments || teachers.length === 0) return <div className="card"><div className="empty-state"><p>No analytics to track.</p></div></div>;
+  1819→
+  1820→    // ---- Calculate ALL stats from actual assignments (source of truth) ----
+  1821→    const teacherStats: Record<string, {
+  1822→      totalComm: number; totalHours: number;
+  1823→      dayComm: Record<string, number>;
+  1824→      assignedSlots: {day:string;start:number;end:number}[];
+  1825→    }> = {};
+  1826→    teachers.forEach(t => {
+  1827→      teacherStats[t.id] = { totalComm: 0, totalHours: 0, dayComm: {} as Record<string,number>, assignedSlots: [] };
+  1828→      DAYS.forEach(d => { teacherStats[t.id].dayComm[d] = 0; });
+  1829→    });
+  1830→
+  1831→    for (const day of DAYS) {
+  1832→      const sessions = results.assignments[day] || [];
+  1833→      for (const sess of sessions) {
+  1834→        const ti = parseTimeRange(sess.time || '9:00-10:30');
+  1835→        for (const c of sess.committees) {
+  1836→          [c.t1, c.t2].forEach(who => {
+  1837→            if (!who.id) return;
+  1838→            const ts = teacherStats[who.id];
+  1839→            if (!ts) return;
+  1840→            ts.totalComm++;
+  1841→            ts.dayComm[day] = (ts.dayComm[day] || 0) + 1;
+  1842→            // Deduplicate hours: same day + same time range = counted once
+  1843→            if (!ts.assignedSlots.some(s => s.day === day && s.start === ti.start && s.end === ti.end)) {
+  1844→              ts.assignedSlots.push({ day, start: ti.start, end: ti.end });
+  1845→              ts.totalHours += ti.duration;
+  1846→            }
+  1847→          });
+  1848→        }
+  1849→      }
+  1850→    }
+  1851→
+  1852→    // Count standby — informational only, no hours/committees added
+  1853→    // (standby is displayed separately in results, not counted in stats)
+  1854→
+  1855→    // ---- Aggregate statistics ----
+  1856→    let totalComAll = 0, totalHrsAll = 0, notUsedCount = 0;
+  1857→    const activeHours: number[] = [];
+  1858→    teachers.forEach(t => {
+  1859→      const ts = teacherStats[t.id];
+  1860→      totalComAll += ts.totalComm;
+  1861→      totalHrsAll += ts.totalHours;
+  1862→      if (ts.totalComm === 0) notUsedCount++;
+  1863→      if (ts.totalHours > 0) activeHours.push(ts.totalHours);
+  1864→    });
+  1865→    const maxHrs = Math.max(...teachers.map(t => teacherStats[t.id].totalHours));
+  1866→    const minHrs = Math.min(...teachers.map(t => teacherStats[t.id].totalHours));
+  1867→    // Average among teachers who actually got assignments (more meaningful)
+  1868→    const avgHrs = activeHours.length > 0 ? activeHours.reduce((a, b) => a + b, 0) / activeHours.length : 0;
+  1869→    const overAvgCount = teachers.filter(t => teacherStats[t.id].totalHours > avgHrs && teacherStats[t.id].totalHours > 0).length;
+  1870→    const sorted = [...teachers].sort((a, b) => teacherStats[b.id].totalHours - teacherStats[a.id].totalHours);
+  1871→
+  1872→    return (
+  1873→      <>
+  1874→        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 12, marginBottom: 20 }}>
+  1875→          <div className="stat-card"><span className="stat-number">{totalHrsAll.toFixed(1)}</span><div className="stat-label">Total Hours (All)</div></div>
+  1876→          <div className="stat-card"><span className="stat-number">{avgHrs.toFixed(1)}</span><div className="stat-label">Avg Hours / Active</div></div>
+  1877→          <div className="stat-card"><span className="stat-number">{maxHrs.toFixed(1)}</span><div className="stat-label">Max Hours</div></div>
+  1878→          <div className="stat-card"><span className="stat-number" style={{ color: (maxHrs - minHrs) > 2 ? 'var(--danger)' : 'var(--accent3)' }}>{(maxHrs - minHrs).toFixed(1)}h</span><div className="stat-label">Max-Min Spread</div></div>
+  1879→          <div className="stat-card"><span className="stat-number" style={{ color: overAvgCount > 0 ? 'var(--danger)' : 'var(--accent3)' }}>{overAvgCount}</span><div className="stat-label">Over Avg</div></div>
+  1880→          <div className="stat-card"><span className="stat-number" style={{ color: 'var(--warning)' }}>{notUsedCount}</span><div className="stat-label">Not Assigned</div></div>
+  1881→        </div>
+  1882→        <div className="card">
+  1883→          <div className="card-title" style={{ marginBottom: 16 }}>Teacher Load Summary</div>
+  1884→          <div className="table-wrap" style={{ maxHeight: '70vh', overflow: 'auto' }}>
+  1885→            <table>
+  1886→              <thead>
+  1887→                <tr>
+  1888→                  <th>#</th><th>Teacher Name</th><th>Subject</th>
+  1889→                  {WEEK1_DAYS.map(d => <th key={d}>{d.replace('W1-','').slice(0,3)}</th>)}
+  1890→                  {WEEK2_DAYS.map(d => <th key={d} style={{ borderLeft: '2px solid var(--accent2)' }}>{d.replace('W2-','').slice(0,3)}</th>)}
+  1891→                  <th style={{ background: 'rgba(0,212,255,0.1)' }}>Total<br/>Committees</th>
+  1892→                  <th style={{ background: 'rgba(0,255,157,0.1)', minWidth: 100 }}>Total<br/>Hours</th>
+  1893→                  <th>Status</th>
+  1894→                </tr>
+  1895→              </thead>
+  1896→              <tbody>
+  1897→                {sorted.map((t, i) => {
+  1898→                  const ts = teacherStats[t.id];
+  1899→                  const hrs = ts.totalHours;
+  1900→                  const pct = maxHrs > 0 ? Math.round(hrs / maxHrs * 100) : 0;
+  1901→                  const isOverAvg = hrs > 0 && hrs > avgHrs;
+  1902→                  const hrsColor = hrs === 0 ? 'var(--text2)' : isOverAvg ? 'var(--danger)' : 'var(--accent3)';
+  1903→                  const status = hrs === 0
+  1904→                    ? <span className="badge" style={{ background: 'rgba(255,68,68,0.1)', color: 'var(--danger)' }}>Not Used</span>
+  1905→                    : isOverAvg
+  1906→                      ? <span className="badge" style={{ background: 'rgba(255,68,68,0.15)', color: 'var(--danger)', fontWeight: 700 }}>Over Avg</span>
+  1907→                      : <span className="badge" style={{ background: 'rgba(0,255,157,0.1)', color: 'var(--accent3)' }}>Balanced</span>;
+  1908→                  return (
+  1909→                    <tr key={t.id} style={isOverAvg ? { background: 'rgba(255,68,68,0.04)' } : {}}>
+  1910→                      <td style={{ color: 'var(--text2)' }}>{i + 1}</td>
+  1911→                      <td style={{ fontWeight: 600, color: 'var(--text)' }}>{t.name}</td>
+  1912→                      <td><span className="badge badge-blue">{t.subject}</span></td>
+  1913→                      {DAYS.map((d, di) => {
+  1914→                        const val = ts.dayComm[d] || 0;
+  1915→                        const cellColor = val >= 2 ? 'var(--danger)' : val === 1 ? 'var(--accent3)' : 'var(--text2)';
+  1916→                        return <td key={d} style={{ textAlign: 'center', fontWeight: 600, color: cellColor, ...(di === WEEK1_DAYS.length ? { borderLeft: '2px solid var(--accent2)' } : {}) }}>{val || '-'}</td>;
+  1917→                      })}
+  1918→                      <td style={{ textAlign: 'center', fontWeight: 700, color: 'var(--accent)', fontFamily: 'var(--mono)' }}>{ts.totalComm}</td>
+  1919→                      <td style={{ background: 'rgba(0,255,157,0.03)', padding: '8px 14px' }}>
+  1920→                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+  1921→                          <span style={{ fontFamily: 'var(--mono)', fontWeight: 700, color: hrsColor, minWidth: 48 }}>{hrs.toFixed(1)}h</span>
+  1922→                          <div style={{ flex: 1, height: 6, background: 'var(--border)', borderRadius: 3, overflow: 'hidden' }}>
+  1923→                            <div style={{ width: `${pct}%`, height: '100%', background: hrsColor, borderRadius: 3, transition: 'width 0.3s' }} />
+  1924→                          </div>
+  1925→                        </div>
+  1926→                      </td>
+  1927→                      <td>{status}</td>
+  1928→                    </tr>
+  1929→                  );
+  1930→                })}
+  1931→                <tr style={{ background: 'rgba(0,212,255,0.05)', fontWeight: 700 }}>
+  1932→                  <td colSpan={3} style={{ color: 'var(--accent)', fontWeight: 700 }}>TOTAL</td>
+  1933→                  {DAYS.map((d, di) => {
+  1934→                    const dayTotal = teachers.reduce((a, t) => a + teacherStats[t.id].dayComm[d], 0);
+  1935→                    return <td key={d} style={{ textAlign: 'center', color: 'var(--accent)', ...(di === WEEK1_DAYS.length ? { borderLeft: '2px solid var(--accent2)' } : {}) }}>{dayTotal}</td>;
+  1936→                  })}
+  1937→                  <td style={{ textAlign: 'center', color: 'var(--accent)', fontFamily: 'var(--mono)' }}>{totalComAll}</td>
+  1938→                  <td style={{ fontFamily: 'var(--mono)', fontWeight: 700, color: 'var(--accent3)', padding: '8px 14px' }}>{totalHrsAll.toFixed(1)}h</td>
+  1939→                  <td></td>
+  1940→                </tr>
+  1941→              </tbody>
+  1942→            </table>
+  1943→          </div>
+  1944→        </div>
+  1945→      </>
+  1946→    );
+  1947→  };
+  1948→
+  1949→  // ========== USERS PAGE (Admin Only) ==========
+  1950→  const renderUsersPage = () => {
+  1951→    const saveSupervisor = async () => {
+  1952→      if (!supFormName.trim()) { showToast('Name is required', 'error'); return; }
+  1953→      if (!editingSupId && !supFormPass.trim()) { showToast('Password is required for new users', 'error'); return; }
+  1954→      if (editingSupId && changeSupPass && !supFormPass.trim()) { showToast('Enter the new password', 'error'); return; }
+  1955→      try {
+  1956→        const res = await fetch('/api/supervisors', {
+  1957→          method: 'POST',
+  1958→          headers: { 'Content-Type': 'application/json' },
+  1959→          body: JSON.stringify({ id: editingSupId, name: supFormName.trim(), password: (!editingSupId || changeSupPass) ? supFormPass : '', permissions: supFormPermissions })
+  1960→        });
+  1961→        if (res.ok) {
+  1962→          const data = await res.json();
+  1963→          setSupervisors(data.supervisors);
+  1964→          logAudit(editingSupId ? 'user_edited' : 'user_added', `${editingSupId ? 'Edited' : 'Added'} supervisor: ${supFormName.trim()}`);
+  1965→          showToast(editingSupId ? 'User updated' : 'User added', 'success');
+  1966→          setSupFormName(''); setSupFormPass(''); setEditingSupId(null); setSupFormPermissions([]); setChangeSupPass(false);
+  1967→        }
+  1968→      } catch { showToast('Error saving user', 'error'); }
+  1969→    };
+  1970→
+  1971→    const deleteSupervisor = async (id: string, name: string) => {
+  1972→      if (!confirm(`Delete user "${name}"?`)) return;
+  1973→      try {
+  1974→        await fetch(`/api/supervisors?id=${id}`, { method: 'DELETE' });
+  1975→        setSupervisors(prev => prev.filter(s => s.id !== id));
+  1976→        logAudit('user_deleted', `Deleted supervisor: ${name}`);
+  1977→        showToast('User deleted', 'success');
+  1978→      } catch { showToast('Error deleting', 'error'); }
+  1979→    };
+  1980→
+  1981→    return (
+  1982→      <div className="card">
+  1983→        <div className="card-header">
+  1984→          <div className="card-title">Manage Supervisors</div>
+  1985→        </div>
+  1986→        <div style={{ background: 'var(--surface2)', borderRadius: 10, padding: 20, marginBottom: 20 }}>
+  1987→          <div style={{ fontSize: 12, color: 'var(--text2)', marginBottom: 10, fontWeight: 600 }}>
+  1988→            {editingSupId ? 'EDIT SUPERVISOR' : 'ADD NEW SUPERVISOR'}
+  1989→          </div>
+  1990→          <div className="grid-3">
+  1991→            <div className="form-group">
+  1992→              <label className="form-label">Full Name</label>
+  1993→              <input className="form-input" value={supFormName} onChange={e => setSupFormName(e.target.value)} placeholder="e.g. Ahmed Mohamed" />
+  1994→            </div>
+  1995→            <div className="form-group">
+  1996→              <label className="form-label">
+  1997→                Password
+  1998→                {editingSupId && (
+  1999→                  <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, cursor: 'pointer', color: 'var(--accent)', marginLeft: 12, fontWeight: 500 }}>
+  2000→                    <input
+
+[showing lines 1-2000 of 2307; use offset=2001 with limit to continue reading]
