@@ -1218,11 +1218,10 @@ export default function ExamSystem() {
     URL.revokeObjectURL(url);
   };
 
-  // ========== EXPORT PDF (Arabic, A4 per grade per day) ==========
+  // ========== EXPORT PDF (Arabic table, A4 per grade per day) ==========
   const exportPDF = async () => {
     if (!results?.assignments) return;
 
-    // Arabic mappings
     const DAY_AR: Record<string, string> = {
       'W1-Saturday': 'السبت', 'W1-Sunday': 'الأحد', 'W1-Monday': 'الاثنين',
       'W1-Tuesday': 'الثلاثاء', 'W1-Wednesday': 'الأربعاء', 'W1-Thursday': 'الخميس',
@@ -1283,19 +1282,14 @@ export default function ExamSystem() {
           </div>
         `;
 
-        // Build table rows — each supervisor gets one row
-        const allSupervisors: { serial: number; name: string }[] = [];
-        let serial = 1;
-        session.committees.forEach(c => {
-          allSupervisors.push({ serial: serial++, name: c.t1.name });
-          allSupervisors.push({ serial: serial++, name: c.t2.name });
-        });
-
-        const rowsHtml = allSupervisors.map(s => `
+        // Table: each row = one committee, split into 2 supervisors + signatures
+        const rowsHtml = session.committees.map(c => `
           <tr>
-            <td style="border:1px solid #333;padding:8px 12px;text-align:center;width:100px;font-weight:bold;">${s.serial}</td>
-            <td style="border:1px solid #333;padding:8px 12px;text-align:center;width:440px;font-size:15px;">${s.name}</td>
-            <td style="border:1px solid #333;padding:8px 12px;text-align:center;width:160px;"></td>
+            <td style="border:1px solid #333;padding:10px 8px;text-align:center;width:55px;font-weight:bold;font-size:14px;">${c.serial}</td>
+            <td style="border:1px solid #333;padding:10px 12px;text-align:center;width:230px;font-size:15px;">${c.t1.name}</td>
+            <td style="border:1px solid #333;padding:10px 8px;text-align:center;width:80px;"></td>
+            <td style="border:1px solid #333;padding:10px 12px;text-align:center;width:230px;font-size:15px;">${c.t2.name}</td>
+            <td style="border:1px solid #333;padding:10px 8px;text-align:center;width:80px;"></td>
           </tr>
         `).join('');
 
@@ -1303,9 +1297,11 @@ export default function ExamSystem() {
           <table style="width:100%;border-collapse:collapse;margin-top:10px;">
             <thead>
               <tr style="background:#1e3a5f;color:#fff;">
-                <th style="border:1px solid #333;padding:10px 12px;text-align:center;width:100px;font-size:15px;">الرقم التسلسلي</th>
-                <th style="border:1px solid #333;padding:10px 12px;text-align:center;width:440px;font-size:15px;">الاسم</th>
-                <th style="border:1px solid #333;padding:10px 12px;text-align:center;width:160px;font-size:15px;">الملاحظات</th>
+                <th style="border:1px solid #333;padding:10px 8px;text-align:center;width:55px;font-size:14px;">م</th>
+                <th style="border:1px solid #333;padding:10px 12px;text-align:center;width:230px;font-size:14px;">اسم المراقب</th>
+                <th style="border:1px solid #333;padding:10px 8px;text-align:center;width:80px;font-size:14px;">التوقيع</th>
+                <th style="border:1px solid #333;padding:10px 12px;text-align:center;width:230px;font-size:14px;">اسم المراقب</th>
+                <th style="border:1px solid #333;padding:10px 8px;text-align:center;width:80px;font-size:14px;">التوقيع</th>
               </tr>
             </thead>
             <tbody>
@@ -1319,7 +1315,7 @@ export default function ExamSystem() {
         container.appendChild(pageDiv);
       }
 
-      // Standby page for this day
+      // Standby page
       if (hasDayStandby) {
         const pageDiv = document.createElement('div');
         pageDiv.style.cssText = 'width:794px;padding:40px 50px;box-sizing:border-box;background:#fff;page-break-after:always;';
@@ -1344,10 +1340,11 @@ export default function ExamSystem() {
 
           const rowsHtml = stList.map((s, i) => `
             <tr>
-              <td style="border:1px solid #333;padding:8px 12px;text-align:center;width:100px;font-weight:bold;">${i + 1}</td>
-              <td style="border:1px solid #333;padding:8px 12px;text-align:center;width:350px;font-size:15px;">${s.name}</td>
-              <td style="border:1px solid #333;padding:8px 12px;text-align:center;width:200px;font-size:13px;color:#555;">${s.stage}</td>
-              <td style="border:1px solid #333;padding:8px 12px;text-align:center;width:100px;"></td>
+              <td style="border:1px solid #333;padding:8px 12px;text-align:center;width:55px;font-weight:bold;font-size:14px;">${i + 1}</td>
+              <td style="border:1px solid #333;padding:8px 12px;text-align:center;width:260px;font-size:15px;">${s.name}</td>
+              <td style="border:1px solid #333;padding:8px 12px;text-align:center;width:80px;"></td>
+              <td style="border:1px solid #333;padding:8px 12px;text-align:center;width:220px;font-size:13px;color:#555;">${s.stage}</td>
+              <td style="border:1px solid #333;padding:8px 12px;text-align:center;width:80px;"></td>
             </tr>
           `).join('');
 
@@ -1355,10 +1352,11 @@ export default function ExamSystem() {
             <table style="width:100%;border-collapse:collapse;margin-top:10px;">
               <thead>
                 <tr style="background:#b47814;color:#fff;">
-                  <th style="border:1px solid #333;padding:10px 12px;text-align:center;width:100px;font-size:15px;">الرقم التسلسلي</th>
-                  <th style="border:1px solid #333;padding:10px 12px;text-align:center;width:350px;font-size:15px;">الاسم</th>
-                  <th style="border:1px solid #333;padding:10px 12px;text-align:center;width:200px;font-size:15px;">المرحلة</th>
-                  <th style="border:1px solid #333;padding:10px 12px;text-align:center;width:100px;font-size:15px;">ملاحظات</th>
+                  <th style="border:1px solid #333;padding:10px 8px;text-align:center;width:55px;font-size:14px;">م</th>
+                  <th style="border:1px solid #333;padding:10px 12px;text-align:center;width:260px;font-size:14px;">اسم المراقب</th>
+                  <th style="border:1px solid #333;padding:10px 8px;text-align:center;width:80px;font-size:14px;">التوقيع</th>
+                  <th style="border:1px solid #333;padding:10px 12px;text-align:center;width:220px;font-size:14px;">المرحلة</th>
+                  <th style="border:1px solid #333;padding:10px 8px;text-align:center;width:80px;font-size:14px;">التوقيع</th>
                 </tr>
               </thead>
               <tbody>
@@ -1375,7 +1373,7 @@ export default function ExamSystem() {
     }
 
     if (pages.length === 0) {
-      showToast('لا توجد نتائج للتصدير', 'error');
+      showToast('No results to export', 'error');
       document.body.removeChild(container);
       return;
     }
@@ -1399,10 +1397,10 @@ export default function ExamSystem() {
         doc.addImage(imgData, 'PNG', 0, 0, imgW, Math.min(imgH, pageH));
       }
       doc.save('exam_supervision_schedule.pdf');
-      showToast('تم تحميل ملف الـ PDF بنجاح!', 'success');
+      showToast('PDF downloaded successfully!', 'success');
     } catch (err) {
       console.error('PDF export error:', err);
-      showToast('حدث خطأ أثناء التصدير', 'error');
+      showToast('Error exporting PDF', 'error');
     } finally {
       document.body.removeChild(container);
     }
@@ -1752,7 +1750,7 @@ export default function ExamSystem() {
     return (
       <div>
         <div style={{ marginBottom: 16, display: 'flex', gap: 10 }}>
-          <button className="btn btn-primary" onClick={exportPDF}>📄 تحميل PDF (جداول الإشراف)</button>
+          <button className="btn btn-primary" onClick={exportPDF}>📄 Download PDF (A4 Printable)</button>
         </div>
         {DAYS.map((day, idx) => {
           const sessions = results.assignments[day] || [];
