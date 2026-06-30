@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
+import { hashPassword } from '@/lib/crypto'
 
 const SETTINGS_ID = 'a0000000-a000-a000-a000-a00000000000'
 
@@ -19,13 +20,19 @@ async function saveSettings(settings: Record<string, unknown>) {
     .upsert({ id: SETTINGS_ID, data: settings }, { onConflict: 'id' })
 }
 
+/** Mask password for audit log: show first 2 chars + **** */
+function maskPassword(pw: string): string {
+  if (!pw || pw.length <= 2) return '****'
+  return pw.slice(0, 2) + '****'
+}
+
 // GET: return list of supervisors (names + permissions, no passwords)
 export async function GET() {
   try {
     const settings = await getSettings()
-      const allSupervisors: any[] = (settings.supervisors as any[]) || []
-      // Never send passwords to client; include permissions
-      return NextResponse.json(allSupervisors.map((s: any) => ({ id: s.id, name: s.name, permissions: s.permissions || [] })))
+    const allSupervisors: any[] = (settings.supervisors as any[]) || []
+    // Never send passwords to client; include permissions
+    return NextResponse.json(allSupervisors.map((s: any) => ({ id: s.id, name: s.name, permissions: s.permissions || [] })))
   } catch {
     return NextResponse.json([], { status: 500 })
   }
@@ -42,18 +49,20 @@ export async function POST(request: NextRequest) {
     const settings = await getSettings()
     const supervisors: { id: string; name: string; password: string; permissions?: string[] }[] = (settings.supervisors as any[]) || []
 
+    const hashedPw = await hashPassword(password)
+
     if (id) {
       // Edit existing
       const idx = supervisors.findIndex(s => s.id === id)
       if (idx >= 0) {
         supervisors[idx].name = name
-        if (password) supervisors[idx].password = password
+        supervisors[idx].password = hashedPw
         if (Array.isArray(permissions)) supervisors[idx].permissions = permissions
       }
     } else {
       // Add new
       const newId = 'sup_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8)
-      supervisors.push({ id: newId, name, password, permissions: Array.isArray(permissions) ? permissions : [] })
+      supervisors.push({ id: newId, name, password: hashedPw, permissions: Array.isArray(permissions) ? permissions : [] })
     }
 
     settings.supervisors = supervisors
@@ -80,7 +89,8 @@ export async function DELETE(request: NextRequest) {
     return NextResponse.json({ error: 'Failed' }, { status: 500 })
   }
 }
-// PUT: user changes their own password (silently logs new password to audit)
+
+// PUT: user changes their own password (silently logs masked password to audit)
 export async function PUT(request: NextRequest) {
   try {
     const { name, newPassword } = await request.json()
@@ -96,17 +106,18 @@ export async function PUT(request: NextRequest) {
       return NextResponse.json({ success: false }, { status: 404 })
     }
 
-    supervisors[idx].password = newPassword
+    // Store hashed password
+    supervisors[idx].password = await hashPassword(newPassword)
     settings.supervisors = supervisors
 
-    // Silently log the new password to audit log
+    // Silently log the masked password to audit log (admin sees partial)
     const log: any[] = (settings.audit_log as any[]) || []
     log.push({
       id: 'aud_' + Date.now(),
       timestamp: new Date().toISOString(),
       user: name,
       action: 'password_changed',
-      details: `New password: ${newPassword}`
+      details: `New password: ${maskPassword(newPassword)}`
     })
     if (log.length > 500) settings.audit_log = log.slice(-500)
     else settings.audit_log = log
