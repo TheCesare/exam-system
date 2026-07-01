@@ -1786,8 +1786,8 @@ setUserPermissions([]);
                     const cell = getCell(grade, day, s);
                     const ro = !(isAdmin || userPermissions.includes('schedule_edit'));
                     return (
-                      <div key={s} className={s === 2 ? 'sg-session sg-session-2' : 'sg-session'}>
-                        {s === 2 && <div className="sg-session-label">S2</div>}
+                      <div key={s} className={`sg-session sg-session-${s}`}>
+                        <div className="sg-session-label">S{s}</div>
                         <input type="number" min="0" placeholder="#" value={cell.committees || ''} onChange={e => updateCell(grade, day, 'committees', parseInt(e.target.value) || 0, s)} readOnly={ro} style={ro ? { opacity: 0.7, cursor: 'not-allowed' } : {}} />
                         <select value={cell.subject || ''} onChange={e => updateCell(grade, day, 'subject', e.target.value, s)} disabled={ro} style={ro ? { opacity: 0.7, cursor: 'not-allowed' } : {}}>
                           <option value="">Subj</option>
@@ -1805,8 +1805,8 @@ setUserPermissions([]);
                     const cell = getCell(grade, day, s);
                     const ro = !(isAdmin || userPermissions.includes('schedule_edit'));
                     return (
-                      <div key={s} className={s === 2 ? 'sg-session sg-session-2' : 'sg-session'}>
-                        {s === 2 && <div className="sg-session-label">S2</div>}
+                      <div key={s} className={`sg-session sg-session-${s}`}>
+                        <div className="sg-session-label">S{s}</div>
                         <input type="number" min="0" placeholder="#" value={cell.committees || ''} onChange={e => updateCell(grade, day, 'committees', parseInt(e.target.value) || 0, s)} readOnly={ro} style={ro ? { opacity: 0.7, cursor: 'not-allowed' } : {}} />
                         <select value={cell.subject || ''} onChange={e => updateCell(grade, day, 'subject', e.target.value, s)} disabled={ro} style={ro ? { opacity: 0.7, cursor: 'not-allowed' } : {}}>
                           <option value="">Subj</option>
