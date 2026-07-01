@@ -562,8 +562,11 @@ setUserPermissions([]);
   };
 
   // ========== SCHEDULE ACTIONS ==========
-  const updateCell = (grade: string, day: string, field: 'committees' | 'subject' | 'time', value: string | number) => {
-    const key = `${grade}__${day}`;
+  const cellKey = (grade: string, day: string, session: number = 1): string =>
+    session === 1 ? `${grade}__${day}` : `${grade}__${day}__${session}`;
+
+  const updateCell = (grade: string, day: string, field: 'committees' | 'subject' | 'time', value: string | number, session: number = 1) => {
+    const key = cellKey(grade, day, session);
     setScheduleBuffer(prev => ({
       ...prev,
       [key]: { ...prev[key], grade, day, [field]: value, id: prev[key]?.id }
@@ -629,13 +632,17 @@ setUserPermissions([]);
     type Slot = { day: string; dayIndex: number; grade: string; stage: string; subject: string; time: string; timeInfo: ReturnType<typeof parseTimeRange>; comId: number };
     const slotsByDay: Record<string, Slot[]> = {};
     DAYS.forEach((d, i) => { slotsByDay[d] = []; });
+    const MAX_SESSIONS = 2;
     DAYS.forEach((day, dayIndex) => {
       GRADES.forEach(grade => {
-        const cell = scheduleBuffer[`${grade}__${day}`];
-        if (cell && cell.committees > 0) {
-          const timeInfo = parseTimeRange(cell.time || DEFAULT_TIMES[grade] || '9:00-10:30');
-          for (let c = 1; c <= cell.committees; c++) {
-            slotsByDay[day].push({ day, dayIndex, grade, stage: getStage(grade), subject: cell.subject || '', time: cell.time || DEFAULT_TIMES[grade] || '9:00-10:30', timeInfo, comId: c });
+        for (let s = 1; s <= MAX_SESSIONS; s++) {
+          const key = s === 1 ? `${grade}__${day}` : `${grade}__${day}__${s}`;
+          const cell = scheduleBuffer[key];
+          if (cell && cell.committees > 0) {
+            const timeInfo = parseTimeRange(cell.time || DEFAULT_TIMES[grade] || '9:00-10:30');
+            for (let c = 1; c <= cell.committees; c++) {
+              slotsByDay[day].push({ day, dayIndex, grade, stage: getStage(grade), subject: cell.subject || '', time: cell.time || DEFAULT_TIMES[grade] || '9:00-10:30', timeInfo, comId: c });
+            }
           }
         }
       });
@@ -680,11 +687,14 @@ setUserPermissions([]);
     DAYS.forEach(d => { finalAssignments[d] = []; });
     DAYS.forEach(day => {
       GRADES.forEach(grade => {
-        const cell = scheduleBuffer[`${grade}__${day}`];
-        if (cell && cell.committees > 0) {
-          const existing = finalAssignments[day].find(s => s.grade === grade && s.time === (cell.time || DEFAULT_TIMES[grade]));
-          if (!existing) {
-            finalAssignments[day].push({ grade, time: cell.time || DEFAULT_TIMES[grade] || '', subject: cell.subject || '', committees: [], standbys: [] });
+        for (let s = 1; s <= MAX_SESSIONS; s++) {
+          const key = s === 1 ? `${grade}__${day}` : `${grade}__${day}__${s}`;
+          const cell = scheduleBuffer[key];
+          if (cell && cell.committees > 0) {
+            const existing = finalAssignments[day].find(ex => ex.grade === grade && ex.time === (cell.time || DEFAULT_TIMES[grade]));
+            if (!existing) {
+              finalAssignments[day].push({ grade, time: cell.time || DEFAULT_TIMES[grade] || '', subject: cell.subject || '', committees: [], standbys: [] });
+            }
           }
         }
       });
@@ -1525,8 +1535,9 @@ setUserPermissions([]);
   };
 
   // ========== RENDER HELPERS ==========
-  const getCell = (grade: string, day: string): ScheduleCell => {
-    return scheduleBuffer[`${grade}__${day}`] || { grade, day, committees: 0, subject: '', time: DEFAULT_TIMES[grade] || '9:00-10:30' };
+  const getCell = (grade: string, day: string, session: number = 1): ScheduleCell => {
+    const key = cellKey(grade, day, session);
+    return scheduleBuffer[key] || { grade, day, committees: 0, subject: '', time: DEFAULT_TIMES[grade] || '9:00-10:30' };
   };
 
   const totalCommittees = Object.values(scheduleBuffer).reduce((a, c) => a + (c.committees || 0), 0);
@@ -1769,32 +1780,44 @@ setUserPermissions([]);
           {GRADES.map(grade => (
             <React.Fragment key={grade}>
               <div className="sg-grade">{grade}</div>
-              {WEEK1_DAYS.map(day => {
-                const cell = getCell(grade, day);
-                return (
-                  <div key={day} className="sg-cell">
-                    <input type="number" min="0" placeholder="Comms" value={cell.committees || ''} onChange={e => updateCell(grade, day, 'committees', parseInt(e.target.value) || 0)} readOnly={!(isAdmin || userPermissions.includes('schedule_edit'))} style={!(isAdmin || userPermissions.includes('schedule_edit')) ? { opacity: 0.7, cursor: 'not-allowed' } : {}} />
-                    <select value={cell.subject || ''} onChange={e => updateCell(grade, day, 'subject', e.target.value)} disabled={!(isAdmin || userPermissions.includes('schedule_edit'))} style={!(isAdmin || userPermissions.includes('schedule_edit')) ? { opacity: 0.7, cursor: 'not-allowed' } : {}}>
-                      <option value="">Subject</option>
-                      {SUBJECTS.map(s => <option key={s} value={s}>{s}</option>)}
-                    </select>
-                    <input type="text" placeholder="Time" value={cell.time || ''} onChange={e => updateCell(grade, day, 'time', e.target.value)} readOnly={!(isAdmin || userPermissions.includes('schedule_edit'))} style={!(isAdmin || userPermissions.includes('schedule_edit')) ? { opacity: 0.7, cursor: 'not-allowed' } : {}} />
-                  </div>
-                );
-              })}
-              {WEEK2_DAYS.map(day => {
-                const cell = getCell(grade, day);
-                return (
-                  <div key={day} className="sg-cell sg-w2-cell">
-                    <input type="number" min="0" placeholder="Comms" value={cell.committees || ''} onChange={e => updateCell(grade, day, 'committees', parseInt(e.target.value) || 0)} readOnly={!(isAdmin || userPermissions.includes('schedule_edit'))} style={!(isAdmin || userPermissions.includes('schedule_edit')) ? { opacity: 0.7, cursor: 'not-allowed' } : {}} />
-                    <select value={cell.subject || ''} onChange={e => updateCell(grade, day, 'subject', e.target.value)} disabled={!(isAdmin || userPermissions.includes('schedule_edit'))} style={!(isAdmin || userPermissions.includes('schedule_edit')) ? { opacity: 0.7, cursor: 'not-allowed' } : {}}>
-                      <option value="">Subject</option>
-                      {SUBJECTS.map(s => <option key={s} value={s}>{s}</option>)}
-                    </select>
-                    <input type="text" placeholder="Time" value={cell.time || ''} onChange={e => updateCell(grade, day, 'time', e.target.value)} readOnly={!(isAdmin || userPermissions.includes('schedule_edit'))} style={!(isAdmin || userPermissions.includes('schedule_edit')) ? { opacity: 0.7, cursor: 'not-allowed' } : {}} />
-                  </div>
-                );
-              })}
+              {WEEK1_DAYS.map(day => (
+                <div key={day} className="sg-cell">
+                  {[1, 2].map(s => {
+                    const cell = getCell(grade, day, s);
+                    const ro = !(isAdmin || userPermissions.includes('schedule_edit'));
+                    return (
+                      <div key={s} className={s === 2 ? 'sg-session sg-session-2' : 'sg-session'}>
+                        {s === 2 && <div className="sg-session-label">S2</div>}
+                        <input type="number" min="0" placeholder="#" value={cell.committees || ''} onChange={e => updateCell(grade, day, 'committees', parseInt(e.target.value) || 0, s)} readOnly={ro} style={ro ? { opacity: 0.7, cursor: 'not-allowed' } : {}} />
+                        <select value={cell.subject || ''} onChange={e => updateCell(grade, day, 'subject', e.target.value, s)} disabled={ro} style={ro ? { opacity: 0.7, cursor: 'not-allowed' } : {}}>
+                          <option value="">Subj</option>
+                          {SUBJECTS.map(sub => <option key={sub} value={sub}>{sub}</option>)}
+                        </select>
+                        <input type="text" placeholder="Time" value={cell.time || ''} onChange={e => updateCell(grade, day, 'time', e.target.value, s)} readOnly={ro} style={ro ? { opacity: 0.7, cursor: 'not-allowed' } : {}} />
+                      </div>
+                    );
+                  })}
+                </div>
+              ))}
+              {WEEK2_DAYS.map(day => (
+                <div key={day} className="sg-cell sg-w2-cell">
+                  {[1, 2].map(s => {
+                    const cell = getCell(grade, day, s);
+                    const ro = !(isAdmin || userPermissions.includes('schedule_edit'));
+                    return (
+                      <div key={s} className={s === 2 ? 'sg-session sg-session-2' : 'sg-session'}>
+                        {s === 2 && <div className="sg-session-label">S2</div>}
+                        <input type="number" min="0" placeholder="#" value={cell.committees || ''} onChange={e => updateCell(grade, day, 'committees', parseInt(e.target.value) || 0, s)} readOnly={ro} style={ro ? { opacity: 0.7, cursor: 'not-allowed' } : {}} />
+                        <select value={cell.subject || ''} onChange={e => updateCell(grade, day, 'subject', e.target.value, s)} disabled={ro} style={ro ? { opacity: 0.7, cursor: 'not-allowed' } : {}}>
+                          <option value="">Subj</option>
+                          {SUBJECTS.map(sub => <option key={sub} value={sub}>{sub}</option>)}
+                        </select>
+                        <input type="text" placeholder="Time" value={cell.time || ''} onChange={e => updateCell(grade, day, 'time', e.target.value, s)} readOnly={ro} style={ro ? { opacity: 0.7, cursor: 'not-allowed' } : {}} />
+                      </div>
+                    );
+                  })}
+                </div>
+              ))}
             </React.Fragment>
           ))}
         </div>

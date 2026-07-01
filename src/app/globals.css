@@ -363,10 +363,35 @@ tbody td {
 .sg-cell {
   background: var(--surface2);
   border-radius: 6px;
-  padding: 6px;
+  padding: 4px;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 2px;
+}
+
+.sg-session {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.sg-session-2 {
+  border-top: 1px dashed var(--border);
+  padding-top: 3px;
+  margin-top: 1px;
+  position: relative;
+}
+
+.sg-session-label {
+  position: absolute;
+  top: -6px;
+  right: 2px;
+  font-size: 8px;
+  font-weight: 700;
+  color: var(--accent);
+  background: var(--surface2);
+  padding: 0 3px;
+  line-height: 1;
 }
 
 .sg-cell input[type="number"] {
