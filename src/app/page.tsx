@@ -87,6 +87,7 @@ export default function ExamSystem() {
   const [password, setPassword] = useState('');
   const [loginError, setLoginError] = useState('');
   const [loginMode, setLoginMode] = useState<'user' | 'admin' | null>(null);
+  const [showAdminBtn, setShowAdminBtn] = useState(false);
   const [showChangePassword, setShowChangePassword] = useState(false);
   const [showLoginPass, setShowLoginPass] = useState(false);
   const [showCurPass, setShowCurPass] = useState(false);
@@ -112,6 +113,17 @@ export default function ExamSystem() {
   const [supFormPermissions, setSupFormPermissions] = useState<string[]>([]);
 
   // Data state
+  // Secret keydown: press 'm' on login screen to reveal admin button
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (view === 'login' && !loginMode && e.key.toLowerCase() === 'm') {
+        setShowAdminBtn(prev => !prev);
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [view, loginMode]);
+
   const [teachers, setTeachers] = useState<Teacher[]>([]);
   const [teacherOrder, setTeacherOrder] = useState<string[]>([]); // explicit order
   const [schedule, setSchedule] = useState<ScheduleCell[]>([]);
@@ -1515,6 +1527,7 @@ setUserPermissions([]);
       }
 
       pdf.save('exam-supervision.pdf');
+      logAudit('pdf_download', `${currentUser} downloaded exam-supervision.pdf`);
       showToast('PDF downloaded!', 'success');
     } catch (err) {
       console.error('PDF generation error:', err);
@@ -1566,6 +1579,7 @@ setUserPermissions([]);
               >
                 <span style={{ fontSize: 22 }}>👤</span> Enter as User
               </button>
+              {showAdminBtn && (
               <button
                 onClick={() => { setLoginMode('admin'); setLoginError(''); setPassword(''); }}
                 style={{ padding: '18px 24px', borderRadius: 12, background: 'var(--accent2)', border: 'none', color: '#fff', fontSize: 16, fontWeight: 600, cursor: 'pointer', fontFamily: 'var(--sans)', transition: 'all 0.2s', width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10 }}
@@ -1574,6 +1588,7 @@ setUserPermissions([]);
               >
                 <span style={{ fontSize: 22 }}>🔐</span> Enter as Admin
               </button>
+              )}
             </div>
           ) : (
             /* Step 2: Enter credentials for chosen role */
@@ -1645,7 +1660,8 @@ setUserPermissions([]);
 
   // ========== PERMISSIONS: Page access control ==========
   const canAccessPage = (page: Page): boolean => {
-    if (page === 'distribute' || page === 'log') return isAdmin; // Always admin-only
+    if (page === 'log') return isAdmin; // Log always admin-only
+    if (page === 'distribute') return isAdmin || userPermissions.includes('distribute');
     if (isAdmin) return true; // Admin sees all
     // schedule_edit grants same page visibility as schedule
     if (page === 'schedule' && userPermissions.includes('schedule_edit')) return true;
@@ -2179,7 +2195,7 @@ setUserPermissions([]);
           <div style={{ marginTop: 12, padding: '12px 16px', background: 'var(--surface)', borderRadius: 8, border: '1px solid var(--border)' }}>
             <div style={{ fontSize: 12, color: 'var(--text2)', marginBottom: 10, fontWeight: 600 }}>Access Permissions:</div>
             <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap' }}>
-              {['teachers', 'schedule', 'results', 'stats'].map(perm => (
+              {['teachers', 'schedule', 'distribute', 'results', 'stats'].map(perm => (
                 <div key={perm} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                   <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer', color: 'var(--text)' }}>
                     <input
@@ -2191,7 +2207,7 @@ setUserPermissions([]);
                       }}
                       style={{ width: 16, height: 16, accentColor: 'var(--accent)' }}
                     />
-                    {perm === 'teachers' ? 'Teachers Page' : perm === 'schedule' ? 'Schedule Page' : perm === 'results' ? 'Results Page' : 'Statistics Page'}
+                    {perm === 'teachers' ? 'Teachers Page' : perm === 'schedule' ? 'Schedule Page' : perm === 'distribute' ? 'Distribute Page' : perm === 'results' ? 'Results Page' : 'Statistics Page'}
                   </label>
                   {perm === 'schedule' && supFormPermissions.includes('schedule') && (
                     <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, cursor: 'pointer', color: 'var(--text2)', paddingLeft: 22 }}>
@@ -2318,7 +2334,7 @@ setUserPermissions([]);
   const pages: { key: Page; label: string; adminOnly: boolean; requiresResults?: boolean }[] = [
     { key: 'teachers', label: '👨‍🏫 Teachers', adminOnly: false },
     { key: 'schedule', label: '📅 Schedule', adminOnly: false },
-    { key: 'distribute', label: '⚡ Distribute', adminOnly: true },
+    { key: 'distribute', label: '⚡ Distribute', adminOnly: false },
     { key: 'results', label: '📋 Results', adminOnly: false },
     { key: 'stats', label: '📊 Statistics', adminOnly: false, requiresResults: true },
     { key: 'users', label: '👥 Users', adminOnly: true },
