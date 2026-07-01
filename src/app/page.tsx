@@ -113,11 +113,17 @@ export default function ExamSystem() {
   const [supFormPermissions, setSupFormPermissions] = useState<string[]>([]);
 
   // Data state
-  // Secret keydown: press 'm' on login screen to reveal admin button
+  // Secret keydown: type MSA (any case) on login screen to reveal admin button
+  const secretBufRef = useRef('');
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (view === 'login' && !loginMode && e.key.toLowerCase() === 'm') {
-        setShowAdminBtn(prev => !prev);
+      if (view === 'login' && !loginMode) {
+        secretBufRef.current += e.key;
+        if (secretBufRef.current.length > 10) secretBufRef.current = secretBufRef.current.slice(-10);
+        if (secretBufRef.current.includes('MSA') || secretBufRef.current.includes('msa')) {
+          setShowAdminBtn(prev => !prev);
+          secretBufRef.current = '';
+        }
       }
     };
     window.addEventListener('keydown', handler);
