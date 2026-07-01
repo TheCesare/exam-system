@@ -1571,7 +1571,12 @@ setUserPermissions([]);
         `}</style>
         <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 16, padding: 48, maxWidth: 400, width: '90%', textAlign: 'center' }}>
           <div style={{ width: 12, height: 12, background: 'var(--accent)', borderRadius: '50%', margin: '0 auto 16px', animation: 'pulse 2s infinite' }} />
-          <h1 style={{ fontFamily: 'var(--mono)', fontSize: 16, color: 'var(--accent)', letterSpacing: 2, marginBottom: 8 }}>EXAM · SUPERVISOR</h1>
+          <h1
+            style={{ fontFamily: 'var(--mono)', fontSize: 16, color: 'var(--accent)', letterSpacing: 2, marginBottom: 8, userSelect: 'none', WebkitUserSelect: 'none', cursor: 'default' }}
+            onTouchStart={() => { const t = setTimeout(() => setShowAdminBtn(p => !p), 800); (window as any)._adminTimer = t; }}
+            onTouchEnd={() => clearTimeout((window as any)._adminTimer)}
+            onTouchCancel={() => clearTimeout((window as any)._adminTimer)}
+          >EXAM · SUPERVISOR</h1>
           <p style={{ color: 'var(--text2)', fontSize: 13, marginBottom: 32 }}>Exam Committee Distribution System</p>
 
           {!loginMode ? (
